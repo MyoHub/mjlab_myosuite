@@ -1,35 +1,45 @@
 """Default configuration generators for MyoSuite environments."""
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
-from mjlab.rl import (
-  RslRlOnPolicyRunnerCfg,
-  RslRlPpoActorCriticCfg,
-  RslRlPpoAlgorithmCfg,
-)
+if TYPE_CHECKING:
+  pass
 
 
 @dataclass
 class MyoSuiteEnvCfg:
-  """Minimal configuration for MyoSuite environments.
+  """Configuration for MyoSuite environments compatible with mjlab.
 
-  This is a placeholder config that allows MyoSuite environments to work
-  with mjlab's training infrastructure. The actual environment configuration
-  comes from MyoSuite itself.
+  This configuration follows mjlab's pattern for environment configs.
+  For GPU-accelerated MyoSuite (mjx/warp versions), set device to "cuda:0".
+
+  Example:
+      >>> cfg = MyoSuiteEnvCfg()
+      >>> cfg.num_envs = 4096  # For training
+      >>> cfg.device = "cuda:0"  # Use GPU
+      >>> env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0", cfg=cfg)
   """
 
   num_envs: int = 1
-  """Number of parallel environments."""
+  """Number of parallel environments. Use 4096+ for GPU training."""
   device: str = "cpu"
-  """Device to use (MyoSuite uses CPU MuJoCo, so GPU acceleration is limited)."""
+  """Device to use. Set to 'cuda:0' for GPU-accelerated MyoSuite (mjx/warp versions)."""
 
 
-def get_default_myosuite_rl_cfg() -> RslRlOnPolicyRunnerCfg:
+def get_default_myosuite_rl_cfg() -> Any:
   """Get default RL configuration for MyoSuite environments.
 
   Returns:
     Default RslRlOnPolicyRunnerCfg with reasonable defaults for MyoSuite tasks
   """
+  # Lazy import to avoid triggering mjlab import chain
+  from mjlab.rl import (
+    RslRlOnPolicyRunnerCfg,
+    RslRlPpoActorCriticCfg,
+    RslRlPpoAlgorithmCfg,
+  )
+
   return RslRlOnPolicyRunnerCfg(
     experiment_name="myosuite",
     run_name="",

@@ -11,13 +11,26 @@ import gymnasium as gym
 import tyro
 
 # Import mjlab_myosuite to trigger auto-registration of MyoSuite environments
-# This must happen before gym.registry.keys() is called in main()
+# This MUST happen before tyro import and before any mjlab imports
+# to ensure registration completes before argument parsing
 try:
   import mjlab_myosuite  # noqa: F401
+
+  # Force registration to complete by accessing the registry
+  _ = list(gym.registry.keys())  # Trigger any lazy registration
 except ImportError:
   pass  # MyoSuite not available, skip registration
 
 from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner
+
+# Optional imports for tracking tasks
+try:
+  from mjlab.tasks.tracking.rl import MotionTrackingOnPolicyRunner
+  from mjlab.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
+except ImportError:
+  MotionTrackingOnPolicyRunner = None  # type: ignore
+  TrackingEnvCfg = None  # type: ignore
 
 try:
   from mjlab_myosuite.config import MyoSuiteEnvCfg
@@ -28,12 +41,46 @@ except ImportError:
   MyoSuiteEnvCfg = None  # type: ignore
   MyoSuiteOnPolicyRunner = None  # type: ignore
   MyoSuiteVecEnvWrapper = None  # type: ignore
-from mjlab.tasks.tracking.rl import MotionTrackingOnPolicyRunner
-from mjlab.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
-from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner
-from mjlab.third_party.isaaclab.isaaclab_tasks.utils.parse_cfg import (
-  load_cfg_from_registry,
-)
+# Try to import cfg loading utilities
+try:
+  from mjlab.third_party.isaaclab.isaaclab_tasks.utils.parse_cfg import (
+    load_cfg_from_registry,
+  )
+except ImportError:
+  # Fallback: implement a simple version for gymnasium registry
+  # Match the signature of the imported function (uses task_name parameter)
+  def load_cfg_from_registry(task_name: str, entry_point_key: str) -> Any:  # type: ignore[no-redef]
+    """Load configuration from gymnasium registry entry point.
+
+    Args:
+      task_name: Task/Environment ID
+      entry_point_key: Key in kwargs (e.g., 'env_cfg_entry_point' or 'rl_cfg_entry_point')
+
+    Returns:
+      The configuration object
+    """
+    if task_name not in gym.registry:
+      raise KeyError(f"Environment {task_name} not found in registry")
+
+    spec = gym.registry[task_name]
+    if spec.kwargs is None or entry_point_key not in spec.kwargs:
+      raise KeyError(
+        f"Entry point '{entry_point_key}' not found for environment {task_name}"
+      )
+
+    entry_point_str = spec.kwargs[entry_point_key]
+    # Parse entry point string like "module.path:function"
+    if ":" in entry_point_str:
+      module_path, func_name = entry_point_str.rsplit(":", 1)
+    else:
+      module_path, func_name = entry_point_str.rsplit(".", 1)
+
+    # Import and call the function
+    module = __import__(module_path, fromlist=[func_name])
+    func = getattr(module, func_name)
+    return func()
+
+
 from mjlab.utils.os import dump_yaml, get_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 
@@ -55,7 +102,7 @@ def run_train(task: str, cfg: TrainConfig) -> None:
 
   registry_name: str | None = None
 
-  if isinstance(cfg.env, TrackingEnvCfg):
+  if TrackingEnvCfg is not None and isinstance(cfg.env, TrackingEnvCfg):
     if not cfg.registry_name:
       raise ValueError("Must provide --registry-name for tracking tasks.")
 
@@ -209,7 +256,9 @@ def run_train(task: str, cfg: TrainConfig) -> None:
   agent_cfg = asdict(cfg.agent)
   env_cfg = asdict(cfg.env)
 
-  if isinstance(cfg.env, TrackingEnvCfg):
+  if TrackingEnvCfg is not None and isinstance(cfg.env, TrackingEnvCfg):
+    if MotionTrackingOnPolicyRunner is None:
+      raise ImportError("MotionTrackingOnPolicyRunner not available")
     runner = MotionTrackingOnPolicyRunner(
       env, agent_cfg, str(log_dir), cfg.device, registry_name
     )
@@ -236,16 +285,70 @@ def run_train(task: str, cfg: TrainConfig) -> None:
 
 
 def main():
-  # Parse first argument to choose the task.
-  # Use mjlab's pattern: filter by prefix and use tyro for argument parsing
+  # Parse first argument manually to avoid tyro evaluating choices before registration
+  if len(sys.argv) < 2:
+    print("Usage: python scripts/train.py <task-id> [options...]")
+    print(
+      "Example: python scripts/train.py Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 --agent.max-iterations 2000"
+    )
+    sys.exit(1)
+
+  # Get the task ID from command line (before tyro processes it)
+  chosen_task = sys.argv[1]
+  remaining_args = sys.argv[2:]
+
+  # Ensure MyoSuite environments are registered
   task_prefix = "Mjlab-"
-  chosen_task, remaining_args = tyro.cli(
-    tyro.extras.literal_type_from_choices(
-      [k for k in gym.registry.keys() if k.startswith(task_prefix)]
-    ),
-    add_help=False,
-    return_unknown_args=True,
-  )
+  if chosen_task.startswith(task_prefix):
+    # Force registration - import happens at module level but ensure it completed
+    try:
+      import mjlab_myosuite  # noqa: F401
+
+      # Force a registry access to ensure registration completed
+      _ = list(gym.registry.keys())
+      # Small delay to ensure async operations complete
+      import time
+
+      time.sleep(0.1)
+    except ImportError:
+      pass  # MyoSuite not available, skip registration
+
+    # Verify the task exists - try multiple times in case of timing issues
+    for _ in range(3):
+      if chosen_task in gym.registry:
+        break
+      # Re-trigger registration
+      try:
+        from mjlab_myosuite.registration import register_myosuite_envs
+
+        register_myosuite_envs()
+      except Exception:
+        pass
+      import time
+
+      time.sleep(0.1)
+
+    if chosen_task not in gym.registry:
+      available_tasks = [k for k in gym.registry.keys() if k.startswith(task_prefix)]
+      print(
+        f"[ERROR] Task '{chosen_task}' not found in registry.\n"
+        f"Found {len(available_tasks)} tasks with prefix '{task_prefix}'."
+      )
+      if available_tasks:
+        # Show similar tasks
+        task_suffix = chosen_task.split("-")[-1] if "-" in chosen_task else chosen_task
+        similar = [t for t in available_tasks if task_suffix in t]
+        if similar:
+          print(f"Similar tasks: {similar[:5]}")
+        else:
+          print(f"Sample tasks: {available_tasks[:5]}")
+      else:
+        print(
+          "[INFO] No MyoSuite tasks found. "
+          "Make sure MyoSuite is installed and mjlab_myosuite imported successfully."
+        )
+      sys.exit(1)
+
   del task_prefix
 
   # Parse the rest of the arguments + allow overriding env_cfg and agent_cfg.

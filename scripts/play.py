@@ -4,7 +4,7 @@ import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal, Optional, cast
+from typing import Any, Literal, Optional, cast
 
 import gymnasium as gym
 import torch
@@ -18,16 +18,74 @@ except ImportError:
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
-from mjlab.tasks.tracking.rl import MotionTrackingOnPolicyRunner
-from mjlab.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
-from mjlab.third_party.isaaclab.isaaclab_tasks.utils.parse_cfg import (
-  load_cfg_from_registry,
-)
+
+# Optional imports for tracking tasks
+try:
+  from mjlab.tasks.tracking.rl import MotionTrackingOnPolicyRunner
+  from mjlab.tasks.tracking.tracking_env_cfg import TrackingEnvCfg
+except ImportError:
+  MotionTrackingOnPolicyRunner = None  # type: ignore
+  TrackingEnvCfg = None  # type: ignore
+# Try to import cfg loading utilities
+try:
+  from mjlab.third_party.isaaclab.isaaclab_tasks.utils.parse_cfg import (
+    load_cfg_from_registry,
+  )
+except ImportError:
+  # Fallback: implement a simple version for gymnasium registry
+  # Match the signature of the imported function (uses task_name parameter)
+  def load_cfg_from_registry(task_name: str, entry_point_key: str) -> Any:  # type: ignore[no-redef]
+    """Load configuration from gymnasium registry entry point.
+
+    Args:
+      task_name: Task/Environment ID
+      entry_point_key: Key in kwargs (e.g., 'env_cfg_entry_point' or 'rl_cfg_entry_point')
+
+    Returns:
+      The configuration object
+    """
+    if task_name not in gym.registry:
+      raise KeyError(f"Environment {task_name} not found in registry")
+
+    spec = gym.registry[task_name]
+    if spec.kwargs is None or entry_point_key not in spec.kwargs:
+      raise KeyError(
+        f"Entry point '{entry_point_key}' not found for environment {task_name}"
+      )
+
+    entry_point_str = spec.kwargs[entry_point_key]
+    # Parse entry point string like "module.path:function"
+    if ":" in entry_point_str:
+      module_path, func_name = entry_point_str.rsplit(":", 1)
+    else:
+      module_path, func_name = entry_point_str.rsplit(".", 1)
+
+    # Import and call the function
+    module = __import__(module_path, fromlist=[func_name])
+    func = getattr(module, func_name)
+    return func()
+
+
 from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
-from mjlab.viewer import NativeMujocoViewer, ViserViewer
-from mjlab.viewer.base import EnvProtocol
 from rsl_rl.runners import OnPolicyRunner
+
+# Optional viewer imports - different mjlab versions may have different viewers
+try:
+  from mjlab.viewer import NativeMujocoViewer, ViserViewer
+  from mjlab.viewer.base import EnvProtocol
+except ImportError:
+  # Try alternative import paths
+  try:
+    from mjlab.viewer import NativeMujocoViewer
+
+    ViserViewer = None  # type: ignore
+    from mjlab.viewer.base import EnvProtocol
+  except ImportError:
+    # Viewers not available
+    NativeMujocoViewer = None  # type: ignore
+    ViserViewer = None  # type: ignore
+    EnvProtocol = None  # type: ignore
 
 try:
   from mjlab_myosuite.config import MyoSuiteEnvCfg
@@ -58,12 +116,23 @@ class PlayConfig:
 
 
 def _resolve_viewer_choice(choice: ViewerChoice) -> ResolvedViewer:
-  """Resolve viewer choice, defaulting to web viewer when no display is present."""
+  """Resolve viewer choice, falling back to available viewers if needed."""
   if choice != "auto":
-    return cast(ResolvedViewer, choice)
+    resolved = cast(ResolvedViewer, choice)
+    # Check if the requested viewer is available
+    if resolved == "viser" and ViserViewer is None:
+      print("[WARN]: ViserViewer not available, falling back to native viewer")
+      return "native"
+    if resolved == "native" and NativeMujocoViewer is None:
+      raise ImportError("NativeMujocoViewer not available in this mjlab version")
+    return resolved
 
   has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-  resolved: ResolvedViewer = "native" if has_display else "viser"
+  # Prefer viser when no display, but fall back to native if viser is not available
+  if has_display or ViserViewer is None:
+    resolved: ResolvedViewer = "native"
+  else:
+    resolved: ResolvedViewer = "viser"
   print(f"[INFO]: Auto-selected viewer: {resolved} (display detected: {has_display})")
   return resolved
 
@@ -93,7 +162,7 @@ def run_play(task: str, cfg: PlayConfig):
   DUMMY_MODE = cfg.agent in {"zero", "random"}
   TRAINED_MODE = not DUMMY_MODE
 
-  if isinstance(env_cfg, TrackingEnvCfg):
+  if TrackingEnvCfg is not None and isinstance(env_cfg, TrackingEnvCfg):
     if DUMMY_MODE:
       if not cfg.registry_name:
         raise ValueError(
@@ -295,7 +364,9 @@ def run_play(task: str, cfg: PlayConfig):
 
       policy = PolicyRandom()
   else:
-    if isinstance(env_cfg, TrackingEnvCfg):
+    if TrackingEnvCfg is not None and isinstance(env_cfg, TrackingEnvCfg):
+      if MotionTrackingOnPolicyRunner is None:
+        raise ImportError("MotionTrackingOnPolicyRunner not available")
       runner = MotionTrackingOnPolicyRunner(
         env, asdict(agent_cfg), log_dir=str(log_dir), device=device
       )
@@ -315,12 +386,27 @@ def run_play(task: str, cfg: PlayConfig):
     sim = env.unwrapped.sim
     if hasattr(sim, "_env"):
       # Ensure forward kinematics are computed for initial visualization
-      mujoco.mj_forward(sim._env.mj_model, sim._env.mj_data)
+      # Support both standard and mjx/warp versions
+      env_obj = sim._env
+      mj_model = getattr(env_obj, "mj_model", getattr(env_obj, "model", None))
+      mj_data = getattr(env_obj, "mj_data", getattr(env_obj, "data", None))
+      if mj_model is not None and mj_data is not None:
+        mujoco.mj_forward(mj_model, mj_data)
 
   if resolved_viewer == "native":
-    NativeMujocoViewer(cast(EnvProtocol, env), policy).run()
+    if NativeMujocoViewer is None:
+      raise ImportError("NativeMujocoViewer not available in this mjlab version")
+    if EnvProtocol is not None:
+      NativeMujocoViewer(cast(EnvProtocol, env), policy).run()  # type: ignore[arg-type]
+    else:
+      NativeMujocoViewer(env, policy).run()  # type: ignore[arg-type]
   elif resolved_viewer == "viser":
-    ViserViewer(cast(EnvProtocol, env), policy).run()
+    if ViserViewer is None:
+      raise ImportError("ViserViewer not available in this mjlab version")
+    if EnvProtocol is not None:
+      ViserViewer(cast(EnvProtocol, env), policy).run()  # type: ignore[arg-type]
+    else:
+      ViserViewer(env, policy).run()  # type: ignore[arg-type]
   else:
     raise RuntimeError(f"Unsupported viewer backend: {resolved_viewer}")
 
@@ -328,16 +414,42 @@ def run_play(task: str, cfg: PlayConfig):
 
 
 def main():
-  # Parse first argument to choose the task.
-  # Use mjlab's pattern: filter by prefix and use tyro for argument parsing
+  # Parse first argument manually to avoid tyro evaluating choices before registration
+  if len(sys.argv) < 2:
+    print("Usage: python scripts/play.py <task-id> [options...]")
+    print(
+      "Example: python scripts/play.py Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 --checkpoint_file <path>"
+    )
+    sys.exit(1)
+
+  # Get the task ID from command line (before tyro processes it)
+  chosen_task = sys.argv[1]
+  remaining_args = sys.argv[2:]
+
+  # Ensure MyoSuite environments are registered
   task_prefix = "Mjlab-"
-  chosen_task, remaining_args = tyro.cli(
-    tyro.extras.literal_type_from_choices(
-      [k for k in gym.registry.keys() if k.startswith(task_prefix)]
-    ),
-    add_help=False,
-    return_unknown_args=True,
-  )
+  if chosen_task.startswith(task_prefix):
+    try:
+      import mjlab_myosuite  # noqa: F401
+    except ImportError:
+      pass  # MyoSuite not available, skip registration
+
+    # Verify the task exists
+    if chosen_task not in gym.registry:
+      available_tasks = [k for k in gym.registry.keys() if k.startswith(task_prefix)]
+      print(
+        f"[ERROR] Task '{chosen_task}' not found in registry.\n"
+        f"Found {len(available_tasks)} tasks with prefix '{task_prefix}'."
+      )
+      if available_tasks:
+        # Show similar tasks
+        similar = [t for t in available_tasks if chosen_task.split("-")[-1] in t]
+        if similar:
+          print(f"Similar tasks: {similar[:5]}")
+        else:
+          print(f"Sample tasks: {available_tasks[:5]}")
+      sys.exit(1)
+
   del task_prefix
 
   # Parse the rest of the arguments + allow overriding env_cfg and agent_cfg.

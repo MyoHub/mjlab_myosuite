@@ -4,31 +4,76 @@ from .config import MyoSuiteEnvCfg
 from .wrapper import MyoSuiteVecEnvWrapper
 
 
+def _import_myosuite_gym():
+  """Import MyoSuite gym module, trying mjx/warp versions first, then standard version.
+
+  Returns:
+    The myosuite gym module
+
+  Raises:
+    ImportError: If no MyoSuite version is available
+  """
+  # Try mjx/warp compatible version first (from mjx branch)
+  try:
+    from myosuite.utils import gym as myosuite_gym
+
+    # Check if this is the mjx/warp version by looking for specific attributes
+    # The mjx version might have different module structure
+    return myosuite_gym
+  except ImportError:
+    pass
+
+  # Try alternative import paths for mjx/warp versions
+  try:
+    # Some versions might have different import paths
+    import myosuite
+
+    if hasattr(myosuite, "utils") and hasattr(myosuite.utils, "gym"):
+      return myosuite.utils.gym
+  except (ImportError, AttributeError):
+    pass
+
+  # Final fallback - try direct import
+  try:
+    from myosuite import utils
+
+    if hasattr(utils, "gym"):
+      return utils.gym
+  except (ImportError, AttributeError):
+    pass
+
+  raise ImportError(
+    "MyoSuite is not installed. Install it with: pip install -U myosuite\n"
+    "For mjx/warp compatible versions, use the mjx branch:\n"
+    "  git clone https://github.com/MyoHub/myosuite.git\n"
+    "  cd myosuite && git checkout mjx && pip install -e ."
+  )
+
+
 def make_myosuite_env(
   myosuite_env_id: str,
   cfg: MyoSuiteEnvCfg | None = None,
   device: str = "cpu",
   render_mode: str | None = None,
+  num_envs: int | None = None,
   **kwargs,
 ) -> MyoSuiteVecEnvWrapper:
   """Create a MyoSuite environment wrapped for mjlab.
+
+  Supports both standard MyoSuite and mjx/warp compatible versions.
 
   Args:
     myosuite_env_id: The original MyoSuite environment ID
     cfg: Environment configuration (MyoSuiteEnvCfg)
     device: Device to use for tensors (default: "cpu")
     render_mode: Render mode (ignored for now, MyoSuite handles rendering differently)
+    num_envs: Number of parallel environments (overrides cfg.num_envs if provided)
     **kwargs: Additional arguments passed to MyoSuite environment
 
   Returns:
     Wrapped MyoSuite environment compatible with mjlab
   """
-  try:
-    from myosuite.utils import gym as myosuite_gym
-  except ImportError:
-    raise ImportError(
-      "MyoSuite is not installed. Install it with: pip install -U myosuite"
-    ) from None
+  myosuite_gym = _import_myosuite_gym()
 
   # Don't set environment variables here - let the system use defaults
   # Setting DISPLAY=:99 or MUJOCO_GL=egl breaks the viewer when a real display is available
@@ -39,7 +84,9 @@ def make_myosuite_env(
   if cfg is None:
     cfg = MyoSuiteEnvCfg()
 
-  num_envs = cfg.num_envs if hasattr(cfg, "num_envs") else 1
+  # num_envs from argument takes precedence over cfg
+  if num_envs is None:
+    num_envs = cfg.num_envs if hasattr(cfg, "num_envs") else 1
   device = cfg.device if hasattr(cfg, "device") and cfg.device else device
 
   # Try to create the environment with compatibility workarounds

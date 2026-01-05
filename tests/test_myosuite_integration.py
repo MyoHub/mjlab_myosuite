@@ -117,3 +117,157 @@ def test_viewer_forward_kinematics_available():
     _ = sim.wp_data  # property should internally mj_forward
   finally:
     env.close()
+
+
+def test_wrapper_creation_direct():
+  """Test creating wrapper directly from MyoSuite environment."""
+  from myosuite.utils import gym as myosuite_gym
+
+  from mjlab_myosuite.wrapper import MyoSuiteVecEnvWrapper
+
+  # Create a MyoSuite environment
+  myosuite_env = myosuite_gym.make("myoElbowPose1D6MRandom-v0")
+
+  # Create wrapper with single environment
+  wrapped = MyoSuiteVecEnvWrapper(env=myosuite_env, num_envs=1, device="cpu")
+
+  try:
+    # Verify wrapper has required attributes
+    assert hasattr(wrapped, "num_envs")
+    assert wrapped.num_envs == 1
+    assert hasattr(wrapped, "device")
+    assert hasattr(wrapped, "sim")
+    assert hasattr(wrapped, "cfg")
+    assert hasattr(wrapped, "action_space")
+    assert hasattr(wrapped, "observation_space")
+    assert hasattr(wrapped, "single_action_space")
+    assert hasattr(wrapped, "single_observation_space")
+
+    # Test reset
+    obs, info = wrapped.reset()
+    assert isinstance(info, dict)
+
+    # Test step
+    action = wrapped.action_space.sample()
+    obs, reward, terminated, truncated, info = wrapped.step(action)
+    done = terminated | truncated
+    # Verify step returns are correct types
+    import torch
+
+    assert isinstance(reward, torch.Tensor)
+    assert isinstance(done, torch.Tensor)
+    assert isinstance(obs, type(obs))  # obs should be TensorDict
+
+    # Test get_observations
+    if hasattr(wrapped, "get_observations"):
+      td = wrapped.get_observations()
+      assert "policy" in td
+      assert "critic" in td
+
+  finally:
+    wrapped.close()
+
+
+def test_wrapper_creation_vectorized():
+  """Test creating wrapper with multiple environments."""
+  from myosuite.utils import gym as myosuite_gym
+
+  from mjlab_myosuite.wrapper import MyoSuiteVecEnvWrapper
+
+  # Create a MyoSuite environment
+  myosuite_env = myosuite_gym.make("myoElbowPose1D6MRandom-v0")
+
+  # Create wrapper with multiple environments
+  num_envs = 4
+  wrapped = MyoSuiteVecEnvWrapper(env=myosuite_env, num_envs=num_envs, device="cpu")
+
+  try:
+    # Verify wrapper has required attributes
+    assert wrapped.num_envs == num_envs
+    assert hasattr(wrapped, "sim")
+    assert hasattr(wrapped, "cfg")
+
+    # Test reset
+    obs, info = wrapped.reset()
+    assert isinstance(info, dict)
+
+    # Test step with batched actions
+    action = wrapped.action_space.sample()
+    obs, reward, terminated, truncated, info = wrapped.step(action)
+    done = terminated | truncated
+    assert reward.shape[0] == num_envs
+    assert done.shape[0] == num_envs
+
+    # Test get_observations
+    if hasattr(wrapped, "get_observations"):
+      td = wrapped.get_observations()
+      assert "policy" in td
+      # Check batch size
+      policy_obs = td["policy"]
+      if hasattr(policy_obs, "shape"):
+        assert policy_obs.shape[0] == num_envs
+
+  finally:
+    wrapped.close()
+
+
+def test_wrapper_creation_via_factory():
+  """Test creating wrapper via env_factory."""
+  from mjlab_myosuite.env_factory import make_myosuite_env
+
+  # Create wrapper via factory
+  wrapped = make_myosuite_env("myoElbowPose1D6MRandom-v0", device="cpu", num_envs=2)
+
+  try:
+    # Verify wrapper has required attributes
+    assert hasattr(wrapped, "num_envs")
+    assert wrapped.num_envs == 2
+    assert hasattr(wrapped, "sim")
+    assert hasattr(wrapped, "cfg")
+
+    # Test reset and step
+    obs, info = wrapped.reset()
+    action = wrapped.action_space.sample()
+    obs, reward, terminated, truncated, info = wrapped.step(action)
+    terminated | truncated
+
+  finally:
+    wrapped.close()
+
+
+def test_wrapper_multiple_myosuite_envs():
+  """Test wrapper creation for different MyoSuite environments."""
+  import gymnasium as gym
+
+  # Trigger auto-registration
+  import mjlab_myosuite  # noqa: F401
+
+  # Test a few different MyoSuite environments
+  test_envs = [
+    "Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0",
+    "Mjlab-MyoSuite-myoElbowPose1D6M-v0",
+  ]
+
+  for env_id in test_envs:
+    if env_id not in gym.registry:
+      continue  # Skip if not registered
+
+    env = gym.make(env_id)
+    try:
+      # Basic functionality test
+      obs, info = env.reset()
+      assert isinstance(info, dict)
+
+      action = env.action_space.sample()
+      obs, reward, terminated, truncated, info = env.step(action)
+      # terminated and truncated are available for use if needed
+
+      # Verify sim interface
+      unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
+      assert hasattr(unwrapped, "sim")
+      sim = unwrapped.sim
+      assert hasattr(sim, "mj_model")
+      assert hasattr(sim, "mj_data")
+
+    finally:
+      env.close()
