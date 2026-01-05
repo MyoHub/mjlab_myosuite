@@ -178,6 +178,37 @@ The exported ONNX model includes:
 - MyoSuite-specific metadata (action dimensions, observation dimensions, etc.)
 - Compatibility with ManagerBasedRlEnv structure
 
+## Viser Playback Utility
+
+The `playback_with_viser` utility provides a convenient way to visualize policy execution using the Viser web-based viewer:
+
+```python
+from scripts.play import playback_with_viser
+import gymnasium as gym
+
+# Create environment and policy
+env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0")
+policy = load_policy("path/to/checkpoint.pt")
+
+# Playback with Viser
+playback_with_viser(env, policy, verbose=True)
+```
+
+You can also use it from the command line:
+
+```bash
+# Use Viser viewer explicitly
+python scripts/play.py Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
+    --viewer viser \
+    --checkpoint_file logs/rsl_rl/myosuite/.../model_2000.pt
+
+# Specify Viser server port
+python scripts/play.py Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
+    --viewer viser \
+    --viser-port 8080 \
+    --checkpoint_file logs/rsl_rl/myosuite/.../model_2000.pt
+```
+
 ## Testing
 
 ```bash

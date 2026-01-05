@@ -72,18 +72,23 @@ from rsl_rl.runners import OnPolicyRunner
 
 # Optional viewer imports - different mjlab versions may have different viewers
 try:
-  from mjlab.viewer import NativeMujocoViewer, ViserViewer
+  from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
   from mjlab.viewer.base import EnvProtocol
+
+  # Alias for backward compatibility
+  ViserViewer = ViserPlayViewer  # type: ignore[assignment]
 except ImportError:
   # Try alternative import paths
   try:
     from mjlab.viewer import NativeMujocoViewer
 
+    ViserPlayViewer = None  # type: ignore
     ViserViewer = None  # type: ignore
     from mjlab.viewer.base import EnvProtocol
   except ImportError:
     # Viewers not available
     NativeMujocoViewer = None  # type: ignore
+    ViserPlayViewer = None  # type: ignore
     ViserViewer = None  # type: ignore
     EnvProtocol = None  # type: ignore
 
@@ -113,6 +118,11 @@ class PlayConfig:
   video_width: int | None = None
   camera: int | str | None = None
   viewer: ViewerChoice = "auto"
+  # Viser-specific options
+  viser_port: int | None = None
+  """Port for Viser web server (default: auto-assigned)"""
+  viser_host: str = "localhost"
+  """Host for Viser web server"""
 
 
 def _resolve_viewer_choice(choice: ViewerChoice) -> ResolvedViewer:
@@ -120,21 +130,147 @@ def _resolve_viewer_choice(choice: ViewerChoice) -> ResolvedViewer:
   if choice != "auto":
     resolved = cast(ResolvedViewer, choice)
     # Check if the requested viewer is available
-    if resolved == "viser" and ViserViewer is None:
-      print("[WARN]: ViserViewer not available, falling back to native viewer")
-      return "native"
+    if resolved == "viser" and (ViserViewer is None or ViserPlayViewer is None):
+      if NativeMujocoViewer is not None:
+        print("[WARN]: ViserViewer not available, falling back to native viewer")
+        return "native"
+      else:
+        raise ImportError(
+          "Neither ViserViewer nor NativeMujocoViewer is available. "
+          "Cannot proceed with visualization."
+        )
     if resolved == "native" and NativeMujocoViewer is None:
-      raise ImportError("NativeMujocoViewer not available in this mjlab version")
+      if ViserViewer is not None or ViserPlayViewer is not None:
+        print("[WARN]: NativeMujocoViewer not available, falling back to viser viewer")
+        return "viser"
+      else:
+        raise ImportError(
+          "Neither NativeMujocoViewer nor ViserViewer is available. "
+          "Cannot proceed with visualization."
+        )
     return resolved
 
   has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
   # Prefer viser when no display, but fall back to native if viser is not available
-  if has_display or ViserViewer is None:
-    resolved: ResolvedViewer = "native"
+  if has_display:
+    # When display is available, prefer native viewer
+    if NativeMujocoViewer is not None:
+      resolved: ResolvedViewer = "native"
+    elif ViserViewer is not None or ViserPlayViewer is not None:
+      resolved: ResolvedViewer = "viser"
+    else:
+      raise ImportError("No viewers available")
   else:
-    resolved: ResolvedViewer = "viser"
+    # When no display, prefer viser (web-based)
+    if ViserViewer is not None or ViserPlayViewer is not None:
+      resolved: ResolvedViewer = "viser"
+    elif NativeMujocoViewer is not None:
+      resolved: ResolvedViewer = "native"
+    else:
+      raise ImportError("No viewers available")
   print(f"[INFO]: Auto-selected viewer: {resolved} (display detected: {has_display})")
   return resolved
+
+
+def playback_with_viser(
+  env: Any,
+  policy: Any,
+  num_steps: int | None = None,
+  reset_on_done: bool = True,
+  verbose: bool = True,
+  port: int | None = None,
+  host: str = "localhost",
+) -> None:
+  """Playback policy with Viser viewer.
+
+  This utility function provides a convenient way to visualize policy execution
+  using the Viser web-based viewer. It handles environment stepping, episode
+  resets, and visualization updates.
+
+  Args:
+    env: The environment to run (should be compatible with ViserViewer)
+    policy: The policy to execute (callable that takes observations and returns actions)
+    num_steps: Maximum number of steps to run. If None, runs until interrupted.
+    reset_on_done: Whether to automatically reset the environment when episodes end.
+    verbose: Whether to print status messages.
+    port: Port for Viser web server. If None, uses default/auto-assigned port.
+    host: Host for Viser web server. Defaults to "localhost".
+
+  Raises:
+    ImportError: If ViserViewer is not available.
+    RuntimeError: If the environment is not compatible with ViserViewer.
+
+  Example:
+    ```python
+    from scripts.play import playback_with_viser
+    import gymnasium as gym
+
+    # Create environment and load policy
+    env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0")
+    policy = load_policy("path/to/checkpoint.pt")
+
+    # Playback with Viser
+    playback_with_viser(env, policy, verbose=True)
+    ```
+  """
+  # Check for ViserPlayViewer (new name) or ViserViewer (old name/alias)
+  viser_viewer = ViserPlayViewer if ViserPlayViewer is not None else ViserViewer
+  if viser_viewer is None:
+    raise ImportError(
+      "ViserViewer (ViserPlayViewer) is not available. "
+      "Install viser or use a different viewer backend (e.g., --viewer native)."
+    )
+
+  if verbose:
+    print("[INFO] Starting Viser playback...")
+    if num_steps is not None:
+      print(f"[INFO] Will run for {num_steps} steps")
+    print(f"[INFO] Viser server will be available at http://{host}:{port or 'auto'}")
+    print("[INFO] Open the URL shown below in your browser to view the simulation")
+    print("[INFO] Press Ctrl+C to stop playback")
+
+  # Ensure forward kinematics are computed for MyoSuite environments
+  if hasattr(env, "unwrapped") and hasattr(env.unwrapped, "sim"):
+    import mujoco
+
+    sim = env.unwrapped.sim
+    if hasattr(sim, "_env"):
+      env_obj = sim._env
+      mj_model = getattr(env_obj, "mj_model", getattr(env_obj, "model", None))
+      mj_data = getattr(env_obj, "mj_data", getattr(env_obj, "data", None))
+      if mj_model is not None and mj_data is not None:
+        mujoco.mj_forward(mj_model, mj_data)
+
+  # Create and run the Viser viewer
+  try:
+    # Check if ViserPlayViewer accepts port/host parameters
+    viewer_kwargs: dict[str, Any] = {}
+    try:
+      import inspect
+
+      sig = inspect.signature(viser_viewer.__init__)
+      if "port" in sig.parameters:
+        viewer_kwargs["port"] = port
+      if "host" in sig.parameters:
+        viewer_kwargs["host"] = host
+    except Exception:
+      pass  # If signature inspection fails, just use defaults
+
+    if EnvProtocol is not None:
+      viewer = viser_viewer(cast(EnvProtocol, env), policy, **viewer_kwargs)  # type: ignore[arg-type]
+    else:
+      viewer = viser_viewer(env, policy, **viewer_kwargs)  # type: ignore[arg-type]
+
+    # The viewer.run() method handles the main loop
+    # If we need custom stepping logic, we can extend this
+    viewer.run()
+  except KeyboardInterrupt:
+    if verbose:
+      print("\n[INFO] Playback interrupted by user")
+  except Exception as e:
+    if verbose:
+      print(f"[ERROR] Playback failed: {e}")
+    raise
 
 
 def run_play(task: str, cfg: PlayConfig):
@@ -401,12 +537,20 @@ def run_play(task: str, cfg: PlayConfig):
     else:
       NativeMujocoViewer(env, policy).run()  # type: ignore[arg-type]
   elif resolved_viewer == "viser":
-    if ViserViewer is None:
-      raise ImportError("ViserViewer not available in this mjlab version")
-    if EnvProtocol is not None:
-      ViserViewer(cast(EnvProtocol, env), policy).run()  # type: ignore[arg-type]
-    else:
-      ViserViewer(env, policy).run()  # type: ignore[arg-type]
+    # Use the dedicated playback utility for better error handling and features
+    try:
+      playback_with_viser(
+        env,
+        policy,
+        verbose=True,
+        port=cfg.viser_port,
+        host=cfg.viser_host,
+      )
+    except ImportError as e:
+      # If ViserViewer is not available, provide helpful error message
+      print(f"[ERROR] {e}")
+      print("[INFO] Try using --viewer native instead, or install viser package.")
+      raise
   else:
     raise RuntimeError(f"Unsupported viewer backend: {resolved_viewer}")
 
@@ -474,3 +618,7 @@ def main():
 
 if __name__ == "__main__":
   main()
+
+
+# Export the playback utility for use in other scripts
+__all__ = ["playback_with_viser", "run_play", "PlayConfig"]
