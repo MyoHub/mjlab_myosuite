@@ -229,7 +229,7 @@ def test_wrapper_creation_via_factory():
     obs, info = wrapped.reset()
     action = wrapped.action_space.sample()
     obs, reward, terminated, truncated, info = wrapped.step(action)
-    terminated | truncated
+    _ = terminated | truncated  # Check done flag
 
   finally:
     wrapped.close()

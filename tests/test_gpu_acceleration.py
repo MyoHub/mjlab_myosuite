@@ -224,7 +224,7 @@ def test_gpu_acceleration_via_factory():
     # Test step
     action = wrapped.action_space.sample()
     obs, reward, terminated, truncated, info = wrapped.step(action)
-    terminated | truncated
+    _ = terminated | truncated  # Check done flag
 
     # Verify reward is on GPU
     if isinstance(reward, torch.Tensor):

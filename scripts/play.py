@@ -127,12 +127,34 @@ class PlayConfig:
 
 def _resolve_viewer_choice(choice: ViewerChoice) -> ResolvedViewer:
   """Resolve viewer choice, falling back to available viewers if needed."""
+  # Declare globals at the start to avoid syntax errors
+  global ViserPlayViewer, ViserViewer
+
+  # Check actual availability - ViserPlayViewer is the real class, ViserViewer is just an alias
+  viser_available = ViserPlayViewer is not None
+
+  # If ViserPlayViewer is None, try to import it directly (might have failed at module level)
+  if not viser_available:
+    try:
+      from mjlab.viewer import ViserPlayViewer as DirectViserPlayViewer
+
+      # Update the global reference if import succeeds
+      ViserPlayViewer = DirectViserPlayViewer
+      ViserViewer = DirectViserPlayViewer
+      viser_available = True
+    except ImportError:
+      pass  # Import failed, viser_available remains False
+
   if choice != "auto":
     resolved = cast(ResolvedViewer, choice)
     # Check if the requested viewer is available
-    if resolved == "viser" and (ViserViewer is None or ViserPlayViewer is None):
+    if resolved == "viser" and not viser_available:
       if NativeMujocoViewer is not None:
         print("[WARN]: ViserViewer not available, falling back to native viewer")
+        print(
+          "[INFO]: To use Viser, ensure mjlab is installed with viser support. "
+          "Try: pip install viser"
+        )
         return "native"
       else:
         raise ImportError(
@@ -140,7 +162,7 @@ def _resolve_viewer_choice(choice: ViewerChoice) -> ResolvedViewer:
           "Cannot proceed with visualization."
         )
     if resolved == "native" and NativeMujocoViewer is None:
-      if ViserViewer is not None or ViserPlayViewer is not None:
+      if viser_available:
         print("[WARN]: NativeMujocoViewer not available, falling back to viser viewer")
         return "viser"
       else:
@@ -156,13 +178,13 @@ def _resolve_viewer_choice(choice: ViewerChoice) -> ResolvedViewer:
     # When display is available, prefer native viewer
     if NativeMujocoViewer is not None:
       resolved: ResolvedViewer = "native"
-    elif ViserViewer is not None or ViserPlayViewer is not None:
+    elif viser_available:
       resolved: ResolvedViewer = "viser"
     else:
       raise ImportError("No viewers available")
   else:
     # When no display, prefer viser (web-based)
-    if ViserViewer is not None or ViserPlayViewer is not None:
+    if viser_available:
       resolved: ResolvedViewer = "viser"
     elif NativeMujocoViewer is not None:
       resolved: ResolvedViewer = "native"
@@ -215,6 +237,21 @@ def playback_with_viser(
   """
   # Check for ViserPlayViewer (new name) or ViserViewer (old name/alias)
   viser_viewer = ViserPlayViewer if ViserPlayViewer is not None else ViserViewer
+
+  # If still None, try to import directly (might have failed at module level)
+  if viser_viewer is None:
+    try:
+      from mjlab.viewer import ViserPlayViewer as DirectViserPlayViewer
+
+      viser_viewer = DirectViserPlayViewer
+      if verbose:
+        print("[INFO] Successfully imported ViserPlayViewer")
+    except ImportError as e:
+      raise ImportError(
+        f"ViserViewer (ViserPlayViewer) is not available: {e}. "
+        "Install viser or use a different viewer backend (e.g., --viewer native)."
+      ) from e
+
   if viser_viewer is None:
     raise ImportError(
       "ViserViewer (ViserPlayViewer) is not available. "
@@ -243,18 +280,22 @@ def playback_with_viser(
 
   # Create and run the Viser viewer
   try:
-    # Check if ViserPlayViewer accepts port/host parameters
+    # Use standard ViserPlayViewer
     viewer_kwargs: dict[str, Any] = {}
     try:
       import inspect
 
-      sig = inspect.signature(viser_viewer.__init__)
-      if "port" in sig.parameters:
-        viewer_kwargs["port"] = port
-      if "host" in sig.parameters:
-        viewer_kwargs["host"] = host
+      if viser_viewer is not None:
+        sig = inspect.signature(viser_viewer.__init__)
+        if "port" in sig.parameters:
+          viewer_kwargs["port"] = port
+        if "host" in sig.parameters:
+          viewer_kwargs["host"] = host
     except Exception:
       pass  # If signature inspection fails, just use defaults
+
+    if viser_viewer is None:
+      raise ImportError("ViserPlayViewer is not available")
 
     if EnvProtocol is not None:
       viewer = viser_viewer(cast(EnvProtocol, env), policy, **viewer_kwargs)  # type: ignore[arg-type]
@@ -262,7 +303,6 @@ def playback_with_viser(
       viewer = viser_viewer(env, policy, **viewer_kwargs)  # type: ignore[arg-type]
 
     # The viewer.run() method handles the main loop
-    # If we need custom stepping logic, we can extend this
     viewer.run()
   except KeyboardInterrupt:
     if verbose:
@@ -312,13 +352,19 @@ def run_play(task: str, cfg: PlayConfig):
 
       api = wandb.Api()
       artifact = api.artifact(registry_name)
-      env_cfg.commands.motion.motion_file = str(
-        Path(artifact.download()) / "motion.npz"
-      )
+      if hasattr(env_cfg, "commands") and env_cfg.commands is not None:
+        if hasattr(env_cfg.commands, "motion") and env_cfg.commands.motion is not None:
+          env_cfg.commands.motion.motion_file = str(
+            Path(artifact.download()) / "motion.npz"
+          )
     else:
       if cfg.motion_file is not None:
         print(f"[INFO]: Using motion file from CLI: {cfg.motion_file}")
-        env_cfg.commands.motion.motion_file = cfg.motion_file
+        if hasattr(env_cfg, "commands") and env_cfg.commands is not None:
+          if (
+            hasattr(env_cfg.commands, "motion") and env_cfg.commands.motion is not None
+          ):
+            env_cfg.commands.motion.motion_file = cfg.motion_file
       else:
         import wandb
 
@@ -331,11 +377,19 @@ def run_play(task: str, cfg: PlayConfig):
         if cfg.wandb_run_path is not None:
           wandb_run = api.run(str(cfg.wandb_run_path))
           art = next(
-            (a for a in wandb_run.used_artifacts() if a.type == "motions"), None
+            (a for a in wandb_run.used_artifacts() if a.type == "motions"),
+            None,
           )
           if art is None:
             raise RuntimeError("No motion artifact found in the run.")
-          env_cfg.commands.motion.motion_file = str(Path(art.download()) / "motion.npz")
+          if hasattr(env_cfg, "commands") and env_cfg.commands is not None:
+            if (
+              hasattr(env_cfg.commands, "motion")
+              and env_cfg.commands.motion is not None
+            ):
+              env_cfg.commands.motion.motion_file = str(
+                Path(art.download()) / "motion.npz"
+              )
 
   log_dir: Optional[Path] = None
   resume_path: Optional[Path] = None
@@ -393,6 +447,21 @@ def run_play(task: str, cfg: PlayConfig):
     # Helper function to find MyoSuiteVecEnvWrapper by unwrapping
     def find_myosuite_wrapper(env_obj):
       """Unwrap environment to find MyoSuiteVecEnvWrapper."""
+      # First, try direct unwrap (gymnasium's unwrapped property)
+      if hasattr(env_obj, "unwrapped"):
+        unwrapped = env_obj.unwrapped
+        if (MyoSuiteVecEnvWrapper is not None) and isinstance(
+          unwrapped, MyoSuiteVecEnvWrapper
+        ):
+          return unwrapped
+
+      # Also check the current object
+      if (MyoSuiteVecEnvWrapper is not None) and isinstance(
+        env_obj, MyoSuiteVecEnvWrapper
+      ):
+        return env_obj
+
+      # Traverse wrapper chain manually
       current = env_obj
       max_depth = 10
       depth = 0
@@ -410,6 +479,7 @@ def run_play(task: str, cfg: PlayConfig):
         visited.add(obj_id)
 
         next_env = None
+        # Try .env attribute first (common in wrappers)
         if hasattr(current, "env"):
           try:
             candidate = current.env
@@ -418,6 +488,7 @@ def run_play(task: str, cfg: PlayConfig):
           except (AttributeError, TypeError):
             pass
 
+        # Try .unwrapped attribute
         if next_env is None and hasattr(current, "unwrapped"):
           try:
             candidate = current.unwrapped
@@ -437,18 +508,64 @@ def run_play(task: str, cfg: PlayConfig):
     # Find the MyoSuiteVecEnvWrapper
     myosuite_wrapper = find_myosuite_wrapper(env)
     if myosuite_wrapper is not None:
-      env = myosuite_wrapper
-      env.clip_actions = agent_cfg.clip_actions
+      # Update the wrapper's properties
+      myosuite_wrapper.clip_actions = agent_cfg.clip_actions
       # CRITICAL: Update wrapper device to match policy device for inference
       # This ensures observations are on the same device as the policy
-      env.device = torch.device(device)
-      env.device_str = device
+      myosuite_wrapper.device = torch.device(device)
+      myosuite_wrapper.device_str = device
+      # Keep the full wrapper chain (env) for the viewer, but ensure
+      # the MyoSuiteVecEnvWrapper properties are set correctly
+      # The viewer will work with the full chain, and the policy will
+      # work through the MyoSuiteVecEnvWrapper
     else:
-      raise RuntimeError(
-        "Could not find MyoSuiteVecEnvWrapper in environment wrapper chain."
-      )
+      # Fallback: try to use the environment as-is if it has the required attributes
+      unwrapped = getattr(env, "unwrapped", None)
+      if unwrapped is not None:
+        # Check if unwrapped has the required MyoSuiteVecEnvWrapper attributes
+        has_device = hasattr(unwrapped, "device")
+        has_device_str = hasattr(unwrapped, "device_str")
+        has_clip_actions = hasattr(unwrapped, "clip_actions")
+
+        if has_device or has_device_str or has_clip_actions:
+          # Assume the unwrapped env is MyoSuiteVecEnvWrapper or compatible
+          if hasattr(unwrapped, "clip_actions"):
+            unwrapped.clip_actions = agent_cfg.clip_actions
+          if hasattr(unwrapped, "device"):
+            unwrapped.device = torch.device(device)
+          if hasattr(unwrapped, "device_str"):
+            unwrapped.device_str = device
+        else:
+          # Debug: print wrapper chain for troubleshooting
+          print(f"[DEBUG] Environment type: {type(env)}")
+          print(f"[DEBUG] Unwrapped type: {type(unwrapped)}")
+          if hasattr(env, "env"):
+            print(f"[DEBUG] env.env type: {type(env.env)}")
+          # Try to traverse and print the chain
+          current = env
+          depth = 0
+          while depth < 5 and current is not None:
+            print(f"[DEBUG] Chain[{depth}]: {type(current)}")
+            if hasattr(current, "env") and current.env is not current:
+              current = current.env
+            elif hasattr(current, "unwrapped") and current.unwrapped is not current:
+              current = current.unwrapped
+            else:
+              break
+            depth += 1
+
+          raise RuntimeError(
+            "Could not find MyoSuiteVecEnvWrapper in environment wrapper chain. "
+            f"Environment type: {type(env)}, unwrapped type: {type(unwrapped)}. "
+            "Check debug output above for wrapper chain details."
+          )
+      else:
+        raise RuntimeError(
+          "Could not find MyoSuiteVecEnvWrapper in environment wrapper chain. "
+          f"Environment type: {type(env)}, no 'unwrapped' attribute found."
+        )
   else:
-    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+    env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)  # type: ignore[arg-type]
 
   if DUMMY_MODE:
     # Get action shape - for vectorized environments, use single_action_space
@@ -478,7 +595,8 @@ def run_play(task: str, cfg: PlayConfig):
           # Return actions with shape (num_envs, action_dim)
           per_env_shape = action_shape if isinstance(action_shape, tuple) else ()
           return torch.zeros(
-            (getattr(env.unwrapped, "num_envs", 1),) + per_env_shape, device=env_device
+            (getattr(env.unwrapped, "num_envs", 1),) + per_env_shape,
+            device=env_device,
           )
 
       policy = PolicyZero()
@@ -500,26 +618,62 @@ def run_play(task: str, cfg: PlayConfig):
 
       policy = PolicyRandom()
   else:
-    if TrackingEnvCfg is not None and isinstance(env_cfg, TrackingEnvCfg):
-      if MotionTrackingOnPolicyRunner is None:
-        raise ImportError("MotionTrackingOnPolicyRunner not available")
-      runner = MotionTrackingOnPolicyRunner(
-        env, asdict(agent_cfg), log_dir=str(log_dir), device=device
-      )
-    else:
-      runner = OnPolicyRunner(
-        env, asdict(agent_cfg), log_dir=str(log_dir), device=device
-      )
-    runner.load(str(resume_path), map_location=device)
-    policy = runner.get_inference_policy(device=device)
+    # For MyoSuite environments, use the unwrapped environment for the runner
+    # The runner needs get_observations() which is on MyoSuiteVecEnvWrapper
+    env_for_runner = env
+    if is_myosuite:
+      # Get the MyoSuiteVecEnvWrapper for the runner
+      unwrapped = getattr(env, "unwrapped", None)
+      if unwrapped is not None and (
+        (MyoSuiteVecEnvWrapper is not None)
+        and isinstance(unwrapped, MyoSuiteVecEnvWrapper)
+      ):
+        env_for_runner = unwrapped
+      elif unwrapped is not None and hasattr(unwrapped, "get_observations"):
+        env_for_runner = unwrapped
+
+  if TrackingEnvCfg is not None and isinstance(env_cfg, TrackingEnvCfg):
+    if MotionTrackingOnPolicyRunner is None:
+      raise ImportError("MotionTrackingOnPolicyRunner not available")
+    # Cast to Any to avoid type checking issues with duck typing
+    runner = MotionTrackingOnPolicyRunner(
+      cast(Any, env_for_runner),
+      asdict(agent_cfg),
+      log_dir=str(log_dir),
+      device=device,
+    )
+  else:
+    # Cast to Any to avoid type checking issues with duck typing
+    runner = OnPolicyRunner(
+      cast(Any, env_for_runner),
+      asdict(agent_cfg),
+      log_dir=str(log_dir),
+      device=device,
+    )
+  runner.load(str(resume_path), map_location=device)
+  policy = runner.get_inference_policy(device=device)
 
   resolved_viewer = _resolve_viewer_choice(cfg.viewer)
 
+  # For MyoSuite environments, get the unwrapped environment for the viewer
+  # The viewer needs env.cfg.viewer which is on MyoSuiteVecEnvWrapper
+  env_for_viewer = env
+  if is_myosuite:
+    # Get the unwrapped environment that has the cfg attribute
+    unwrapped = getattr(env, "unwrapped", None)
+    if unwrapped is not None and (
+      (MyoSuiteVecEnvWrapper is not None)
+      and isinstance(unwrapped, MyoSuiteVecEnvWrapper)
+    ):
+      env_for_viewer = unwrapped
+    elif unwrapped is not None and hasattr(unwrapped, "cfg"):
+      env_for_viewer = unwrapped
+
   # For MyoSuite environments, ensure forward kinematics are computed before viewer starts
-  if is_myosuite and hasattr(env.unwrapped, "sim"):
+  if is_myosuite and hasattr(env_for_viewer, "sim"):
     import mujoco
 
-    sim = env.unwrapped.sim
+    sim = env_for_viewer.sim
     if hasattr(sim, "_env"):
       # Ensure forward kinematics are computed for initial visualization
       # Support both standard and mjx/warp versions
@@ -533,14 +687,14 @@ def run_play(task: str, cfg: PlayConfig):
     if NativeMujocoViewer is None:
       raise ImportError("NativeMujocoViewer not available in this mjlab version")
     if EnvProtocol is not None:
-      NativeMujocoViewer(cast(EnvProtocol, env), policy).run()  # type: ignore[arg-type]
+      NativeMujocoViewer(cast(EnvProtocol, env_for_viewer), policy).run()  # type: ignore[arg-type]
     else:
-      NativeMujocoViewer(env, policy).run()  # type: ignore[arg-type]
+      NativeMujocoViewer(env_for_viewer, policy).run()  # type: ignore[arg-type]
   elif resolved_viewer == "viser":
     # Use the dedicated playback utility for better error handling and features
     try:
       playback_with_viser(
-        env,
+        env_for_viewer,
         policy,
         verbose=True,
         port=cfg.viser_port,

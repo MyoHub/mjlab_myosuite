@@ -27,9 +27,11 @@ Integration package for using MyoSuite environments with mjlab's training infras
 ```bash
 # Install mjlab-myosuite
 pip install -e .
+pip install "myosuite @ git+https://github.com/MyoHub/myosuite.git@mjx"
 
 # Or with uv (faster)
 uv pip install -e .
+uv pip install "myosuite @ git+https://github.com/MyoHub/myosuite.git@mjx"
 ```
 
 ## Quick Start
@@ -94,7 +96,7 @@ The integration follows mjlab's native task registration pattern from the [creat
 ┌──────────────▼──────────────────────┐
 │   MyoSuite (Standard or MJX/Warp)   │
 │   - Musculoskeletal models          │
-│   - Task-specific rewards          │
+│   - Task-specific rewards           │
 └─────────────────────────────────────┘
 ```
 
@@ -223,6 +225,24 @@ pytest tests/test_gpu_acceleration.py -v
 
 # Run ONNX export tests (requires ONNX)
 pytest tests/test_onnx_export.py -v
+```
+
+## Development
+
+Run tests:
+
+```bash
+make test          # Run all tests
+make test-fast     # Skip slow integration tests
+uv run --no-default-groups --group cu128 --group dev pyright
+uv run --no-default-groups --group cu128 --group dev pytest
+```
+
+Format code:
+
+```bash
+uvx pre-commit install
+make format
 ```
 
 ## Documentation

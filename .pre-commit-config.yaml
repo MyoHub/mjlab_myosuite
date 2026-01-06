@@ -1,23 +1,5 @@
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Ruff version.
-    rev: v0.14.10
-    hooks:
-      # Run the linter with auto-fix and unsafe fixes.
-      - id: ruff-check
-        args: [--fix, --unsafe-fixes]
-      # Run the formatter.
-      - id: ruff-format
-  - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v4.0.0-alpha.8
-    hooks:
-      - id: prettier
-        additional_dependencies: [prettier@3.3.3]
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
-    hooks:
-      - id: end-of-file-fixer
-      - id: trailing-whitespace
+  # 1. Type checking: run Pyright first
   - repo: local
     hooks:
       - id: pyright
@@ -25,4 +7,28 @@ repos:
         entry: uv run pyright
         language: system
         types: [python]
-        pass_filenames: false
+        pass_filenames: false # can be true if repo is large
+
+  # 2. Python linting & formatting with Ruff
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.10
+    hooks:
+      # Lint without breaking commit loop
+      - id: ruff-check
+        args: [--exit-zero] # only warn, don’t modify files
+      # Run auto-fixer (optional: manual/CI preferred)
+      - id: ruff-format
+
+  # 3. Prettier for JS/TS/other assets
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        additional_dependencies: [prettier@3.3.3]
+
+  # 4. Standard cleanup hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace

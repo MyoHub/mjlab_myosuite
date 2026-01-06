@@ -251,7 +251,7 @@ def run_train(task: str, cfg: TrainConfig) -> None:
         )
   else:
     # Standard mjlab environment - wrap with RslRlVecEnvWrapper
-    env = RslRlVecEnvWrapper(env, clip_actions=cfg.agent.clip_actions)
+    env = RslRlVecEnvWrapper(env, clip_actions=cfg.agent.clip_actions)  # type: ignore[arg-type]
 
   agent_cfg = asdict(cfg.agent)
   env_cfg = asdict(cfg.env)

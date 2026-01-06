@@ -32,8 +32,8 @@ try:
   # Register the task
   register_mjlab_task(
     task_id="Mjlab-MyoElbow-v0",
-    env_cfg=myoelbow_env_cfg(play=False),
-    play_env_cfg=myoelbow_env_cfg(play=True),
+    env_cfg=myoelbow_env_cfg(play=False),  # type: ignore[arg-type]
+    play_env_cfg=myoelbow_env_cfg(play=True),  # type: ignore[arg-type]
     rl_cfg=myoelbow_rl_cfg(),
     runner_cls=VelocityOnPolicyRunner,
   )

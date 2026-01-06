@@ -3,7 +3,25 @@
 import os
 from typing import Any
 
-from mjlab.utils.lab_api.rl.exporter import export_policy_as_onnx
+# Try to import ONNX exporter from mjlab, with fallback
+_onnx_export_available = False
+try:
+  from mjlab.utils.lab_api.rl.exporter import export_policy_as_onnx
+
+  _onnx_export_available = True
+except ImportError:
+  # Fallback: try alternative import paths
+  try:
+    from mjlab.rl.exporter_utils import export_policy_as_onnx
+
+    _onnx_export_available = True
+  except ImportError:
+    # If ONNX export is not available, create a stub function
+    def export_policy_as_onnx(*args, **kwargs) -> None:  # type: ignore[assignment]
+      raise ImportError(
+        "ONNX export functionality is not available. "
+        "Please ensure mjlab is properly installed with ONNX support."
+      )
 
 
 def export_myosuite_policy_as_onnx(
@@ -21,7 +39,15 @@ def export_myosuite_policy_as_onnx(
     path: The path to the saving directory.
     filename: The name of exported ONNX file. Defaults to "policy.onnx".
     verbose: Whether to print the model summary. Defaults to False.
+
+  Raises:
+    ImportError: If ONNX export functionality is not available.
   """
+  if not _onnx_export_available:
+    raise ImportError(
+      "ONNX export functionality is not available. "
+      "Please ensure mjlab is properly installed with ONNX support."
+    )
   if not os.path.exists(path):
     os.makedirs(path, exist_ok=True)
   export_policy_as_onnx(
