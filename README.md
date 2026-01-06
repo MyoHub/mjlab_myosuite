@@ -46,7 +46,7 @@ import mjlab_myosuite  # Auto-registers all MyoSuite environments
 env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0")
 obs, info = env.reset()
 action = env.action_space.sample()
-obs, reward, done, info = env.step(action)
+obs, rewards, dones, extras = env.step(action)
 env.close()
 ```
 

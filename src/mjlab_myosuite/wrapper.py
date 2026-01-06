@@ -539,7 +539,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
           # Support both standard and mjx/warp versions
           mj_model = getattr(
-            self._env, "mj_model", getattr(self._env, "model", self._mj_model)
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
           )
           mj_data = getattr(
             self._env, "mj_data", getattr(self._env, "data", self._mj_data)
@@ -555,7 +557,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
           # Support both standard and mjx/warp versions
           mj_model = getattr(
-            self._env, "mj_model", getattr(self._env, "model", self._mj_model)
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
           )
           mj_data = getattr(
             self._env, "mj_data", getattr(self._env, "data", self._mj_data)
@@ -570,7 +574,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
           # Support both standard and mjx/warp versions
           mj_model = getattr(
-            self._env, "mj_model", getattr(self._env, "model", self._mj_model)
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
           )
           mj_data = getattr(
             self._env, "mj_data", getattr(self._env, "data", self._mj_data)
@@ -590,7 +596,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
           # Ensure forward kinematics are computed for visualization
           # Support both standard and mjx/warp versions
           mj_model = getattr(
-            self._env, "mj_model", getattr(self._env, "model", self._mj_model)
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
           )
           mj_data = getattr(
             self._env, "mj_data", getattr(self._env, "data", self._mj_data)
@@ -627,7 +635,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
         def mj_model(self):
           # Support both standard and mjx/warp versions
           return getattr(
-            self._env, "mj_model", getattr(self._env, "model", self._mj_model)
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
           )
 
         @property
@@ -637,7 +647,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
           # Support both standard and mjx/warp versions
           mj_model = getattr(
-            self._env, "mj_model", getattr(self._env, "model", self._mj_model)
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
           )
           mj_data = getattr(
             self._env, "mj_data", getattr(self._env, "data", self._mj_data)
@@ -652,7 +664,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
           # Support both standard and mjx/warp versions
           mj_model = getattr(
-            self._env, "mj_model", getattr(self._env, "model", self._mj_model)
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
           )
           mj_data = getattr(
             self._env, "mj_data", getattr(self._env, "data", self._mj_data)
@@ -667,7 +681,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
           # Support both standard and mjx/warp versions
           mj_model = getattr(
-            self._env, "mj_model", getattr(self._env, "model", self._mj_model)
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
           )
           mj_data = getattr(
             self._env, "mj_data", getattr(self._env, "data", self._mj_data)
@@ -684,7 +700,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
           # Support both standard and mjx/warp versions
           mj_model = getattr(
-            self._env, "mj_model", getattr(self._env, "model", self._mj_model)
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
           )
           mj_data = getattr(
             self._env, "mj_data", getattr(self._env, "data", self._mj_data)
@@ -896,8 +914,12 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
   def step(  # type: ignore[override]
     self, actions: torch.Tensor
-  ) -> tuple[TensorDict, torch.Tensor, torch.Tensor, torch.Tensor, dict]:
-    """Step the environment."""
+  ) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
+    """Step the environment.
+
+    Returns 4 values for rsl_rl compatibility: (obs, rewards, dones, extras)
+    where dones = terminated | truncated.
+    """
     # Convert actions to numpy
     if isinstance(actions, torch.Tensor):
       actions_np = actions.cpu().numpy()
@@ -909,7 +931,28 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       actions_np = np.clip(actions_np, -self.clip_actions, self.clip_actions)
 
     # Step environment
-    obs, rew, terminated, truncated, info = self.env.step(actions_np)
+    step_result = self.env.step(actions_np)
+
+    # Handle both old and new Gym API
+    if len(step_result) == 4:
+      # old API: obs, reward, done, info
+      obs, rew, done, info = step_result  # type: ignore[misc]
+      terminated = done
+      # Convert False to tensor with same shape as terminated
+      if isinstance(terminated, (bool, np.bool_)):
+        truncated = np.array(False, dtype=bool)
+      elif isinstance(terminated, np.ndarray):
+        truncated = np.zeros_like(terminated, dtype=bool)
+      else:
+        truncated = False
+    elif len(step_result) == 5:
+      # new API: obs, reward, terminated, truncated, info
+      obs, rew, terminated, truncated, info = step_result  # type: ignore[misc]
+      # No need to compute done - we have terminated and truncated separately
+    else:
+      raise ValueError(
+        f"Unexpected number of values returned from env.step: {len(step_result)}"
+      )
 
     # Update forward kinematics for visualization
     # This ensures the viewer has current position data
@@ -944,16 +987,20 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     done_mask = terminated_tensor | truncated_tensor
     self.episode_length_buf[done_mask] = 0
 
-    # Add time_outs to extras
+    # Combine terminated and truncated into dones for rsl_rl compatibility
+    dones_tensor = done_mask
+
+    # Add time_outs and other info to extras
     extras = info.copy() if isinstance(info, dict) else {}
     extras["time_outs"] = truncated_tensor
+    extras["terminated"] = terminated_tensor
+    extras["truncated"] = truncated_tensor
 
-    # Return 5 values to match Gymnasium API: (obs, reward, terminated, truncated, info)
+    # Return 4 values for rsl_rl compatibility: (obs, rewards, dones, extras)
     return (
       TensorDict(obs_dict, batch_size=[self.num_envs]),
       rew_tensor,
-      terminated_tensor,
-      truncated_tensor,
+      dones_tensor,
       extras,
     )
 
@@ -1014,7 +1061,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
         obs_dict = {}
         for key in obs[0].keys():
           tensor = torch.as_tensor(
-            np.array([o[key] for o in obs]), device=self.device, dtype=torch.float32
+            np.array([o[key] for o in obs]),
+            device=self.device,
+            dtype=torch.float32,
           )
           if key in ["policy", "critic"]:
             obs_dict[key] = tensor
@@ -1068,7 +1117,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
     if isinstance(self.single_action_space, gym.spaces.Box):
       self.single_action_space = gym.spaces.Box(
-        low=-self.clip_actions, high=self.clip_actions, shape=(self.num_actions,)
+        low=-self.clip_actions,
+        high=self.clip_actions,
+        shape=(self.num_actions,),
       )
       self.action_space = gym.vector.utils.batch_space(
         self.single_action_space, self.num_envs

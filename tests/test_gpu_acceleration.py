@@ -71,13 +71,29 @@ def test_gpu_acceleration_observations():
 
     # Test step to verify rewards and done flags are on GPU
     action = env.action_space.sample()
-    obs, reward, terminated, truncated, info = env.step(action)
+    obs, rewards, dones, extras = env.step(action)  # type: ignore[assignment]
+    # Extract terminated and truncated from extras if needed
+    # Ensure they are torch tensors to avoid numpy array boolean ambiguity
+    # Ensure dones is a tensor
+    if not isinstance(dones, torch.Tensor):
+      dones = torch.as_tensor(dones, dtype=torch.bool)
+    terminated = extras.get("terminated", dones)
+    if not isinstance(terminated, torch.Tensor):
+      terminated = torch.as_tensor(terminated, dtype=torch.bool)
+    # Get truncated from extras, or create zeros tensor if not available
+    truncated_raw = extras.get("truncated", None)
+    if truncated_raw is None:
+      truncated = torch.zeros_like(dones, dtype=torch.bool)
+    elif isinstance(truncated_raw, torch.Tensor):
+      truncated = truncated_raw
+    else:
+      truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
     done = terminated | truncated
 
     # Verify reward is on GPU
-    if isinstance(reward, torch.Tensor):
-      assert reward.device.type == "cuda", (
-        f"Reward should be on GPU, but found device: {reward.device}"
+    if isinstance(rewards, torch.Tensor):
+      assert rewards.device.type == "cuda", (
+        f"Reward should be on GPU, but found device: {rewards.device}"
       )
 
     # Verify done is on GPU
@@ -173,13 +189,29 @@ def test_gpu_acceleration_batched_environments():
 
     # Test step with batched actions
     action = env.action_space.sample()
-    obs, reward, terminated, truncated, info = env.step(action)
+    obs, rewards, dones, extras = env.step(action)  # type: ignore[assignment]
+    # Extract terminated and truncated from extras if needed
+    # Ensure they are torch tensors to avoid numpy array boolean ambiguity
+    # Ensure dones is a tensor
+    if not isinstance(dones, torch.Tensor):
+      dones = torch.as_tensor(dones, dtype=torch.bool)
+    terminated = extras.get("terminated", dones)
+    if not isinstance(terminated, torch.Tensor):
+      terminated = torch.as_tensor(terminated, dtype=torch.bool)
+    # Get truncated from extras, or create zeros tensor if not available
+    truncated_raw = extras.get("truncated", None)
+    if truncated_raw is None:
+      truncated = torch.zeros_like(dones, dtype=torch.bool)
+    elif isinstance(truncated_raw, torch.Tensor):
+      truncated = truncated_raw
+    else:
+      truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
     done = terminated | truncated
 
     # Verify batch sizes
-    if isinstance(reward, torch.Tensor):
-      assert reward.shape[0] == 8
-      assert reward.device.type == "cuda"
+    if isinstance(rewards, torch.Tensor):
+      assert rewards.shape[0] == 8
+      assert rewards.device.type == "cuda"
 
     if isinstance(done, torch.Tensor):
       assert done.shape[0] == 8
@@ -223,12 +255,25 @@ def test_gpu_acceleration_via_factory():
 
     # Test step
     action = wrapped.action_space.sample()
-    obs, reward, terminated, truncated, info = wrapped.step(action)
+    obs, rewards, dones, extras = wrapped.step(action)
+    # Extract terminated and truncated from extras if needed
+    # Ensure they are torch tensors to avoid numpy array boolean ambiguity
+    terminated = extras.get("terminated", dones)
+    if not isinstance(terminated, torch.Tensor):
+      terminated = torch.as_tensor(terminated)
+    # Get truncated from extras, or create zeros tensor if not available
+    truncated_raw = extras.get("truncated", None)
+    if truncated_raw is None:
+      truncated = torch.zeros_like(dones, dtype=torch.bool)
+    elif isinstance(truncated_raw, torch.Tensor):
+      truncated = truncated_raw
+    else:
+      truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
     _ = terminated | truncated  # Check done flag
 
     # Verify reward is on GPU
-    if isinstance(reward, torch.Tensor):
-      assert reward.device.type == "cuda"
+    if isinstance(rewards, torch.Tensor):
+      assert rewards.device.type == "cuda"
 
   finally:
     wrapped.close()
