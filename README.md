@@ -52,24 +52,18 @@ env.close()
 
 ### 2. Training with mjlab
 
-**Use the local training scripts** (includes workarounds for mjlab compatibility issues):
+**Use the mjlab training scripts**:
 
 ```bash
 # Train a policy
-uv run python scripts/train.py Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
-    --agent.max-iterations 2000 \
-    --agent.num-steps-per-env 24
+uv run train Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
+    --agent.max-iterations 200 \
+    --agent.num-steps-per-env 512
 
 # Play with trained policy
-uv run python scripts/play.py Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
-    --checkpoint_file logs/rsl_rl/myosuite/.../model_2000.pt
+uv run play Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
+    --checkpoint_file logs/rsl_rl/myosuite/.../model_199.pt
 ```
-
-**Note**: The local scripts (`scripts/train.py` and `scripts/play.py`) automatically handle:
-
-- ✅ Fallback for missing mjlab utilities
-- ✅ Proper MyoSuite environment registration timing
-- ✅ Compatibility with different mjlab versions
 
 ### 3. Custom Task Registration
 
@@ -131,35 +125,7 @@ rl_cfg.algorithm.learning_rate = 3e-4
 
 ## Known Issues
 
-### mujoco_warp Import Error
-
-If you see an error like:
-
-```
-ImportError: cannot import name 'rays' from 'mujoco_warp'
-```
-
-This is a known compatibility issue between mjlab and mujoco_warp. The mjlab codebase tries to import `rays` but mujoco_warp exports `ray` instead.
-
-**Solution**: The local training scripts (`scripts/train.py` and `scripts/play.py`) automatically apply a monkey patch to fix this issue. Always use these scripts instead of mjlab's native scripts:
-
-```bash
-# ✅ Use local scripts (includes workarounds)
-python scripts/train.py Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 ...
-
-# ❌ Don't use mjlab's native script (will fail with import error)
-python -m mjlab.scripts.train Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 ...
-```
-
-### Environment Registration Timing
-
-If you see "No tasks found with prefix 'Mjlab-'", ensure that:
-
-1. MyoSuite is properly installed
-2. You're using the local scripts (`scripts/train.py`), not mjlab's native scripts
-3. The import of `mjlab_myosuite` happens before any mjlab imports
-
-The local scripts handle this automatically.
+TBD
 
 ## ONNX Model Export
 
@@ -179,6 +145,42 @@ The exported ONNX model includes:
 - Policy network (actor) with optional observation normalizer
 - MyoSuite-specific metadata (action dimensions, observation dimensions, etc.)
 - Compatibility with ManagerBasedRlEnv structure
+
+## Tracking Tasks (not yet fully implemented)
+
+MyoSuite tracking tasks follow the same structure as mjlab's tracking tasks, allowing you to train policies to track reference motions. The tracking functionality is implemented in `src/mjlab_myosuite/tasks/tracking/` following the [mjlab tracking structure](https://github.com/mujocolab/mjlab/tree/main/src/mjlab/tasks/tracking).
+
+### Tracking Configuration
+
+```python
+from mjlab_myosuite.tasks.tracking.tracking_env_cfg import MyoSuiteTrackingEnvCfg
+
+# Create tracking configuration
+cfg = MyoSuiteTrackingEnvCfg()
+cfg.num_envs = 4096
+cfg.device = "cuda:0"
+cfg.commands.motion.motion_file = "path/to/motion.npz"
+```
+
+### Training Tracking Tasks
+
+```bash
+# Train with motion file from wandb artifact
+uv run train Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0 \
+    --motion-file examples/elbow_sinusoidal_motion.npz     \
+    --agent.max-iterations 10000
+```
+
+### Playing Tracking Tasks
+
+```bash
+# Play with motion file
+uv run play Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0 \
+    --checkpoint_file logs/rsl_rl/myosuite/.../model_2000.pt \
+    --motion-file path/to/motion.npz
+```
+
+The tracking runner (`MyoSuiteMotionTrackingOnPolicyRunner`) extends the base MyoSuite runner and provides support for motion tracking, including wandb artifact integration for motion files.
 
 ## Viser Playback Utility
 
@@ -200,12 +202,12 @@ You can also use it from the command line:
 
 ```bash
 # Use Viser viewer explicitly
-python scripts/play.py Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
+play Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
     --viewer viser \
     --checkpoint_file logs/rsl_rl/myosuite/.../model_2000.pt
 
 # Specify Viser server port
-python scripts/play.py Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
+play Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
     --viewer viser \
     --viser-port 8080 \
     --checkpoint_file logs/rsl_rl/myosuite/.../model_2000.pt

@@ -1,7 +1,13 @@
 """Wrapper for MyoSuite environments to work with mjlab's training infrastructure."""
 
 import copy
+import os
 from typing import Any
+
+# Set MUJOCO_GL=egl early for headless rendering support
+# This must be done BEFORE any MuJoCo imports
+if "MUJOCO_GL" not in os.environ:
+  os.environ["MUJOCO_GL"] = "egl"
 
 import gymnasium as gym
 import numpy as np
@@ -132,6 +138,7 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     num_envs: int | None = None,
     device: str | torch.device = "cpu",
     clip_actions: float | None = None,
+    render_mode: str | None = None,
   ):
     """Initialize the wrapper.
 
@@ -140,9 +147,20 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       num_envs: Number of environments (if env is single, will vectorize)
       device: Device to use for tensors
       clip_actions: Optional action clipping value
+      render_mode: Render mode for the environment (e.g., "rgb_array" for video recording)
     """
     # Initialize gym.Env parent (no-op but required for proper inheritance)
     gym.Env.__init__(self)
+
+    # Store render_mode as an attribute (required for RecordVideo wrapper)
+    self._render_mode = render_mode or getattr(env, "render_mode", None)
+
+    # Note: MUJOCO_GL=egl is set at module level for headless rendering support
+
+    # Initialize offline renderer lazily (after scene is created)
+    # We'll initialize it in render() or after _setup_manager_compatibility()
+    self._offline_renderer = None
+    self._offline_renderer_initialized = False
 
     self.clip_actions = clip_actions
 
@@ -569,8 +587,14 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
         @property
         def data(self):
-          """Return mj_data for compatibility with sim.data access."""
+          """Return data adapter for compatibility with sim.data access.
+
+          OffscreenRenderer expects data.qpos[env_idx].cpu().numpy(), so we need
+          to provide a torch tensor interface. This adapter wraps mj_data and
+          provides the expected interface.
+          """
           import mujoco
+          import torch
 
           # Support both standard and mjx/warp versions
           mj_model = getattr(
@@ -582,7 +606,54 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
             self._env, "mj_data", getattr(self._env, "data", self._mj_data)
           )
           mujoco.mj_forward(mj_model, mj_data)  # type: ignore[attr-defined]
-          return mj_data
+
+          # Create an adapter that provides torch tensor interface
+          class DataAdapter:
+            """Adapter to make mj_data look like ManagerBasedRlEnv's sim.data."""
+
+            def __init__(self, mj_data, mj_model):
+              self._mj_data = mj_data
+              self._mj_model = mj_model
+              # nworld is the number of environments (1 for single env)
+              self.nworld = 1
+
+            @property
+            def qpos(self):
+              """Return qpos as torch tensor with batch dimension."""
+              # OffscreenRenderer expects data.qpos[env_idx].cpu().numpy()
+              # So we need shape (1, nq) for batch_size=1
+              qpos_np = self._mj_data.qpos.copy()
+              qpos_tensor = torch.from_numpy(qpos_np).unsqueeze(0)  # Add batch dim
+              return qpos_tensor
+
+            @property
+            def qvel(self):
+              """Return qvel as torch tensor with batch dimension."""
+              qvel_np = self._mj_data.qvel.copy()
+              qvel_tensor = torch.from_numpy(qvel_np).unsqueeze(0)  # Add batch dim
+              return qvel_tensor
+
+            @property
+            def mocap_pos(self):
+              """Return mocap_pos as torch tensor with batch dimension."""
+              if self._mj_model.nmocap > 0:
+                mocap_pos_np = self._mj_data.mocap_pos.copy()
+                return torch.from_numpy(mocap_pos_np).unsqueeze(0)
+              else:
+                # Return empty tensor with correct shape
+                return torch.zeros((1, 0, 3), dtype=torch.float32)
+
+            @property
+            def mocap_quat(self):
+              """Return mocap_quat as torch tensor with batch dimension."""
+              if self._mj_model.nmocap > 0:
+                mocap_quat_np = self._mj_data.mocap_quat.copy()
+                return torch.from_numpy(mocap_quat_np).unsqueeze(0)
+              else:
+                # Return empty tensor with correct shape
+                return torch.zeros((1, 0, 4), dtype=torch.float32)
+
+          return DataAdapter(mj_data, mj_model)
 
       # Override methods that might be called but aren't needed
       def create_graph(self) -> None:
@@ -787,7 +858,199 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
   @property
   def render_mode(self) -> str | None:
     """Get render mode."""
+    # Return stored render_mode if set, otherwise get from underlying env
+    if hasattr(self, "_render_mode") and self._render_mode is not None:
+      return self._render_mode
     return getattr(self.env, "render_mode", None)
+
+  def _initialize_offline_renderer(self):
+    """Initialize offline renderer (called after scene is created)."""
+    if self._offline_renderer_initialized:
+      return
+
+    # Ensure EGL is set up before initializing renderer
+    # (should already be set at module level, but double-check)
+    if "MUJOCO_GL" not in os.environ:
+      os.environ["MUJOCO_GL"] = "egl"
+
+    try:
+      from mjlab.viewer.offscreen_renderer import OffscreenRenderer
+
+      # Get mj_model from the underlying environment
+      myosuite_env = None
+      if isinstance(self.env, vector.VectorEnv):
+        if hasattr(self.env, "envs") and len(self.env.envs) > 0:
+          myosuite_env = self.env.envs[0]
+          while hasattr(myosuite_env, "env") and myosuite_env.env is not myosuite_env:
+            myosuite_env = myosuite_env.env
+      else:
+        myosuite_env = self.env
+
+      mj_model = getattr(myosuite_env, "mj_model", getattr(myosuite_env, "model", None))
+      if mj_model is not None:
+        # Create a minimal viewer config
+        try:
+          from mjlab.viewer.viewer_config import ViewerConfig
+
+          viewer_cfg = ViewerConfig()
+        except ImportError:
+          # Fallback: create a simple config dict
+          from dataclasses import dataclass
+
+          @dataclass
+          class SimpleViewerConfig:
+            height: int = 480
+            width: int = 640
+
+          viewer_cfg = SimpleViewerConfig()
+
+        # Initialize offline renderer (scene should be created by now)
+        # Note: OffscreenRenderer uses mujoco.Renderer internally which requires EGL
+        # Type ignore: Mock objects are compatible with viewer interface
+        self._offline_renderer = OffscreenRenderer(
+          model=mj_model,
+          cfg=viewer_cfg,  # type: ignore[arg-type]
+          scene=self.scene,  # type: ignore[arg-type]
+        )
+        self._offline_renderer.initialize()
+        self._offline_renderer_initialized = True
+    except Exception:
+      # If offline renderer initialization fails, continue without it
+      # render() will return None
+      pass
+
+  def render(self) -> np.ndarray | None:
+    """Render the environment.
+
+    Uses mjlab's OffscreenRenderer (like ManagerBasedRlEnv does) if available,
+    otherwise falls back to the underlying environment's render method.
+    """
+    # Only render if render_mode is set to rgb_array
+    if self.render_mode != "rgb_array":
+      return None
+
+    # Initialize offline renderer lazily if not already done
+    if not self._offline_renderer_initialized:
+      self._initialize_offline_renderer()
+
+    # Use offline renderer if available (like ManagerBasedRlEnv does)
+    if self._offline_renderer is not None:
+      try:
+        # Get mj_data from the underlying environment
+        myosuite_env = None
+        if isinstance(self.env, vector.VectorEnv):
+          if hasattr(self.env, "envs") and len(self.env.envs) > 0:
+            myosuite_env = self.env.envs[0]
+            while hasattr(myosuite_env, "env") and myosuite_env.env is not myosuite_env:
+              myosuite_env = myosuite_env.env
+        else:
+          myosuite_env = self.env
+
+        if myosuite_env is not None:
+          # OffscreenRenderer.update() expects sim.data format with torch tensors
+          # Use our mock sim.data which should provide the right interface
+          if hasattr(self, "sim") and self.sim is not None:
+            try:
+              # Ensure forward kinematics are computed
+              import mujoco
+
+              mj_model = getattr(
+                myosuite_env,
+                "mj_model",
+                getattr(myosuite_env, "model", None),
+              )
+              mj_data = getattr(
+                myosuite_env,
+                "mj_data",
+                getattr(myosuite_env, "data", None),
+              )
+              if mj_model is not None and mj_data is not None:
+                mujoco.mj_forward(mj_model, mj_data)
+
+              # Get sim.data (which should return DataAdapter with torch tensor interface)
+              try:
+                sim_data = self.sim.data
+              except (AttributeError, Exception):
+                # If sim.data fails, create DataAdapter directly from mj_data
+                import torch
+
+                class DataAdapter:
+                  """Adapter to make mj_data look like ManagerBasedRlEnv's sim.data."""
+
+                  def __init__(self, mj_data, mj_model):
+                    self._mj_data = mj_data
+                    self._mj_model = mj_model
+                    # nworld is the number of environments (1 for single env)
+                    self.nworld = 1
+
+                  @property
+                  def qpos(self):
+                    qpos_np = self._mj_data.qpos.copy()
+                    return torch.from_numpy(qpos_np).unsqueeze(0)  # Add batch dim
+
+                  @property
+                  def qvel(self):
+                    qvel_np = self._mj_data.qvel.copy()
+                    return torch.from_numpy(qvel_np).unsqueeze(0)  # Add batch dim
+
+                  @property
+                  def mocap_pos(self):
+                    """Return mocap_pos as torch tensor with batch dimension."""
+                    if self._mj_model.nmocap > 0:
+                      mocap_pos_np = self._mj_data.mocap_pos.copy()
+                      return torch.from_numpy(mocap_pos_np).unsqueeze(0)
+                    else:
+                      # Return empty tensor with correct shape
+                      return torch.zeros((1, 0, 3), dtype=torch.float32)
+
+                  @property
+                  def mocap_quat(self):
+                    """Return mocap_quat as torch tensor with batch dimension."""
+                    if self._mj_model.nmocap > 0:
+                      mocap_quat_np = self._mj_data.mocap_quat.copy()
+                      return torch.from_numpy(mocap_quat_np).unsqueeze(0)
+                    else:
+                      # Return empty tensor with correct shape
+                      return torch.zeros((1, 0, 4), dtype=torch.float32)
+
+                sim_data = DataAdapter(mj_data, mj_model)
+
+              # Update renderer with sim.data (which should have torch tensor interface)
+              self._offline_renderer.update(sim_data)
+              frame = self._offline_renderer.render()
+              if frame is not None:
+                return frame
+            except Exception:
+              # If update fails, continue to fallback
+              pass
+      except Exception:
+        # If offline renderer fails, try fallback
+        pass
+
+    # Fallback: Try underlying environment's render method
+    myosuite_env = None
+    if isinstance(self.env, vector.VectorEnv):
+      if hasattr(self.env, "envs") and len(self.env.envs) > 0:
+        myosuite_env = self.env.envs[0]
+        while hasattr(myosuite_env, "env") and myosuite_env.env is not myosuite_env:
+          myosuite_env = myosuite_env.env
+    else:
+      myosuite_env = self.env
+
+    if myosuite_env is not None and hasattr(myosuite_env, "render"):
+      try:
+        result = myosuite_env.render()
+        if isinstance(result, list) and len(result) > 0:
+          frame = result[0] if isinstance(result[0], np.ndarray) else None
+          if frame is not None:
+            return frame
+        elif isinstance(result, np.ndarray):
+          return result
+      except (NotImplementedError, Exception):
+        pass
+
+    # If all else fails, return None
+    return None
 
   @classmethod
   def class_name(cls) -> str:
@@ -810,6 +1073,18 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     CRITICAL: RSL-RL expects observations on the same device as the policy.
     This method ensures all observation tensors are on self.device.
     """
+    # If _last_obs_dict is empty, we need to reset the environment first
+    # This can happen if get_observations() is called before the first step
+    if not self._last_obs_dict:
+      obs, _ = self.env.reset()
+      self._last_obs_dict = self._convert_obs_to_dict(obs)
+      # Verify that observations are on the correct device after initial conversion
+      for key, value in self._last_obs_dict.items():
+        if isinstance(value, torch.Tensor):
+          if value.device != self.device:
+            # Force move to correct device immediately
+            self._last_obs_dict[key] = value.to(device=self.device)
+
     # Rebuild observation dict, ensuring all tensors are on the correct device
     # This is necessary because tensors might have been created on CPU initially
     obs_dict_on_device = {}

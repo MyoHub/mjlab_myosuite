@@ -15,7 +15,7 @@ class MyoSuiteOnPolicyRunner(OnPolicyRunner):
   for MyoSuite environments with ManagerBasedRlEnv-compatible structure.
   """
 
-  env: MyoSuiteVecEnvWrapper
+  env: MyoSuiteVecEnvWrapper  # type: ignore[assignment]
 
   def save(self, path: str, infos=None):
     """Save the model and training information, including ONNX export.
