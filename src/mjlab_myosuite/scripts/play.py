@@ -75,6 +75,7 @@ def _patched_load_env_cfg(task_name: str, play: bool = False):
             )
             # Use object.__setattr__ for frozen dataclass
             object.__setattr__(cfg, "scene", scene_cfg)
+
           except (ImportError, Exception):
             print("[WARNING] Failed to create scene cfg and falling back to mock")
 
@@ -178,7 +179,7 @@ def _patched_manager_init(self, cfg, device, render_mode=None):
             spec_fn=None,  # Will be set to use MyoSuite's model after env creation
           )
           object.__setattr__(cfg, "scene", scene_cfg)
-        except (ImportError, Exception) as e:
+        except (ImportError, Exception):
           # Fallback: create a simple mock that matches SceneCfg interface
           class _MockSceneCfg:
             def __init__(self, num_envs=1):
@@ -215,6 +216,7 @@ def _patched_manager_init(self, cfg, device, render_mode=None):
       if not cfg.observations:
         try:
           from mjlab.managers.observation_group import ObservationGroupCfg
+
           from mjlab_myosuite.managers import MyoSuiteObservationTermCfg
 
           if MyoSuiteObservationTermCfg is not None:
@@ -235,6 +237,7 @@ def _patched_manager_init(self, cfg, device, render_mode=None):
       if not cfg.actions:
         try:
           from mjlab.managers.action_term import ActionTermCfg
+
           from mjlab_myosuite.managers import MyoSuiteActionTermCfg
 
           if MyoSuiteActionTermCfg is not None:
@@ -825,10 +828,176 @@ def _patched_run_play(task_id: str, cfg) -> None:
         raise ImportError(
           "ViserPlayViewer not available. Install viser or use --viewer native"
         )
-      if EnvProtocol is not None:
-        ViserPlayViewer(cast(EnvProtocol, env_for_viewer), policy).run()  # type: ignore[arg-type]
-      else:
-        ViserPlayViewer(env_for_viewer, policy).run()  # type: ignore[arg-type]
+
+      # Patch ViserMujocoScene._add_fixed_geometry to handle textured planes
+      try:
+        import mujoco
+        from mjlab.viewer.viser.scene import ViserMujocoScene
+        from mujoco import mj_id2name, mjtGeom, mjtObj
+
+        from mjlab_myosuite.viewer_helpers import (
+          create_textured_plane,
+          find_textured_geometries,
+        )
+
+        original_add_fixed_geometry = ViserMujocoScene._add_fixed_geometry
+
+        def patched_add_fixed_geometry(self):
+          """Patched version that adds textured planes as meshes instead of grids."""
+          # Find all textured geometries
+          textured_geom_info = find_textured_geometries(self.mj_model)
+
+          body_geoms_visual: dict[int, list[int]] = {}
+          body_geoms_collision: dict[int, list[int]] = {}
+
+          for i in range(self.mj_model.ngeom):
+            body_id = self.mj_model.geom_bodyid[i]
+            target = (
+              body_geoms_collision if self._is_collision_geom(i) else body_geoms_visual
+            )
+            target.setdefault(body_id, []).append(i)
+
+          # Process all bodies with geoms.
+          all_bodies = set(body_geoms_visual.keys()) | set(body_geoms_collision.keys())
+
+          for body_id in all_bodies:
+            # Get body name.
+            from mjlab.viewer.viser.conversions import (
+              get_body_name,
+              is_fixed_body,
+              merge_geoms,
+            )
+
+            body_name = get_body_name(self.mj_model, body_id)
+
+            # Fixed world geometry. We'll assume this is shared between all environments.
+            if is_fixed_body(self.mj_model, body_id):
+              # Create both visual and collision geoms for fixed bodies (terrain, floor, etc.)
+              # but show them all since they're static.
+              all_geoms = []
+              if body_id in body_geoms_visual:
+                all_geoms.extend(body_geoms_visual[body_id])
+              if body_id in body_geoms_collision:
+                all_geoms.extend(body_geoms_collision[body_id])
+
+              if not all_geoms:
+                continue
+
+              # Iterate over geoms - handle each individually to preserve textures
+              from mjlab.viewer.viser.conversions import mujoco_mesh_to_trimesh
+
+              nonplane_geom_ids: list[int] = []
+              for geom_id in all_geoms:
+                geom_type = self.mj_model.geom_type[geom_id]
+                matid, texid = textured_geom_info.get(geom_id, (-1, -1))
+
+                # Check if this is a mesh geometry (with or without texture)
+                mesh_id = self.mj_model.geom_dataid[geom_id]
+                if mesh_id >= 0 and self.mj_model.mesh_vertnum[mesh_id] > 0:
+                  # Mesh geometry - use mujoco_mesh_to_trimesh which preserves textures
+                  try:
+                    mesh = mujoco_mesh_to_trimesh(self.mj_model, geom_id, verbose=False)
+                    # DO NOT TOUCH mesh.visual - MuJoCo already gave us UVs + textures
+                    geom_name = (
+                      mj_id2name(self.mj_model, mjtObj.mjOBJ_GEOM, geom_id)
+                      or f"geom_{geom_id}"
+                    )
+                    # Apply geom transform (not body transform for individual geoms)
+                    self.server.scene.add_mesh_trimesh(
+                      f"/fixed_bodies/{body_name}/{geom_name}",
+                      mesh,
+                      cast_shadow=False,
+                      receive_shadow=0.2,
+                      position=self.mj_model.geom_pos[geom_id],
+                      wxyz=self.mj_model.geom_quat[geom_id],
+                      visible=True,
+                    )
+                    continue  # Skip adding to nonplane_geom_ids
+                  except Exception:
+                    pass  # Fallback to merge_geoms if individual conversion fails
+
+                # Check if this is a plane with a texture
+                if geom_type == mjtGeom.mjGEOM_PLANE:
+                  if texid >= 0:
+                    # Textured plane - add as mesh instead of grid
+                    try:
+                      mesh = create_textured_plane(self.mj_model, geom_id, matid, texid)
+                      if mesh is not None:
+                        geom_name = (
+                          mj_id2name(
+                            self.mj_model,
+                            mjtObj.mjOBJ_GEOM,
+                            geom_id,
+                          )
+                          or f"geom_{geom_id}"
+                        )
+                        self.server.scene.add_mesh_trimesh(
+                          f"/fixed_bodies/{body_name}/{geom_name}",
+                          mesh,
+                          cast_shadow=False,
+                          receive_shadow=0.2,
+                          position=self.mj_model.geom_pos[geom_id],
+                          wxyz=self.mj_model.geom_quat[geom_id],
+                          visible=True,
+                        )
+                        continue  # Skip adding as grid
+                    except Exception:
+                      pass  # Fallback to grid if mesh creation fails
+
+                  # Untextured plane - add as infinite grid (original behavior)
+                  geom_name = (
+                    mj_id2name(self.mj_model, mjtObj.mjOBJ_GEOM, geom_id)
+                    or f"geom_{geom_id}"
+                  )
+                  self.server.scene.add_grid(
+                    f"/fixed_bodies/{body_name}/{geom_name}",
+                    width=2000.0,
+                    height=2000.0,
+                    infinite_grid=True,
+                    fade_distance=50.0,
+                    shadow_opacity=0.2,
+                    position=self.mj_model.geom_pos[geom_id],
+                    wxyz=self.mj_model.geom_quat[geom_id],
+                  )
+                else:
+                  # Other primitive types - add to list for merging
+                  nonplane_geom_ids.append(geom_id)
+
+              # Handle remaining non-plane, non-mesh geoms by merging (original behavior)
+              if len(nonplane_geom_ids) > 0:
+                self.server.scene.add_mesh_trimesh(
+                  f"/fixed_bodies/{body_name}",
+                  merge_geoms(self.mj_model, nonplane_geom_ids),
+                  cast_shadow=False,
+                  receive_shadow=0.2,
+                  position=self.mj_model.body(body_id).pos,
+                  wxyz=self.mj_model.body(body_id).quat,
+                  visible=True,
+                )
+
+        # Apply patch
+        ViserMujocoScene._add_fixed_geometry = patched_add_fixed_geometry
+
+        try:
+          if EnvProtocol is not None:
+            ViserPlayViewer(cast(EnvProtocol, env_for_viewer), policy).run()  # type: ignore[arg-type]
+          else:
+            ViserPlayViewer(env_for_viewer, policy).run()  # type: ignore[arg-type]
+        finally:
+          # Restore original method
+          ViserMujocoScene._add_fixed_geometry = original_add_fixed_geometry
+      except Exception as e:
+        # If patching fails, fall back to original behavior
+        import warnings
+
+        warnings.warn(
+          f"Failed to patch ViserMujocoScene for textured planes: {e}",
+          UserWarning,
+        )
+        if EnvProtocol is not None:
+          ViserPlayViewer(cast(EnvProtocol, env_for_viewer), policy).run()  # type: ignore[arg-type]
+        else:
+          ViserPlayViewer(env_for_viewer, policy).run()  # type: ignore[arg-type]
     else:
       raise RuntimeError(f"Unsupported viewer backend: {resolved_viewer}")
 

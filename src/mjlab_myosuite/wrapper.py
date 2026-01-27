@@ -530,13 +530,67 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       def __init__(self, env):
         # Don't call super().__init__() - we're bypassing MuJoCo Warp setup
         # Instead, set up minimal attributes needed for compatibility
-        self._env = env
+        self._env = (
+          env  # This is the wrapped env (SyncVectorEnv), keep for compatibility
+        )
+        # Get the actual unwrapped MyoSuite environment for model access
+        myosuite_env = env
+        # Unwrap to get the actual MyoSuite environment
+        while (
+          myosuite_env is not None
+          and hasattr(myosuite_env, "unwrapped")
+          and myosuite_env.unwrapped is not myosuite_env
+        ):
+          myosuite_env = myosuite_env.unwrapped
+
+        # Also check if it's a VectorEnv and get the first env
+        if hasattr(myosuite_env, "envs") and len(myosuite_env.envs) > 0:
+          myosuite_env = myosuite_env.envs[0]
+          while (
+            myosuite_env is not None
+            and hasattr(myosuite_env, "unwrapped")
+            and myosuite_env.unwrapped is not myosuite_env
+          ):
+            myosuite_env = myosuite_env.unwrapped
+
+        # Store the actual MyoSuite environment for model access
+        self._myosuite_env = myosuite_env
+
         # Support both standard and mjx/warp versions
-        self._mj_model = getattr(env, "mj_model", getattr(env, "model", None))
-        self._mj_data = getattr(env, "mj_data", getattr(env, "data", None))
+        # Get model from the actual MyoSuite environment
+        self._mj_model = None
+        if myosuite_env is not None:
+          self._mj_model = getattr(
+            myosuite_env, "mj_model", getattr(myosuite_env, "model", None)
+          )
+          if self._mj_model is None and hasattr(myosuite_env, "sim"):
+            self._mj_model = getattr(
+              myosuite_env.sim, "mj_model", getattr(myosuite_env.sim, "model", None)
+            )
+
+          # NOTE: Textures are defined in the scene XML but MuJoCo doesn't load them
+          # into the model (ntext=0) because texture file paths are relative and don't
+          # resolve correctly. The snapshot renderer can render textures because it
+          # loads them on-demand. For viser to show textures, we need to ensure the
+          # model is loaded with textures. Since reloading doesn't work (paths still
+          # don't resolve), the issue may be that viser needs the model loaded from
+          # XML with the correct working directory, or it needs texture files to be
+          # accessible via a different mechanism.
+
+        self._mj_data = None
+        if myosuite_env is not None:
+          self._mj_data = getattr(
+            myosuite_env, "mj_data", getattr(myosuite_env, "data", None)
+          )
+          if self._mj_data is None and hasattr(myosuite_env, "sim"):
+            self._mj_data = getattr(
+              myosuite_env.sim, "mj_data", getattr(myosuite_env.sim, "data", None)
+            )
+
         if self._mj_model is None or self._mj_data is None:
           raise RuntimeError(
-            "MyoSuite environment must have mj_model/mj_data or model/data attributes"
+            "MyoSuite environment must have mj_model/mj_data or model/data attributes. "
+            f"Tried to get from: {type(myosuite_env).__name__ if myosuite_env else 'None'}"
           )
         self._wp_data = MockWpData(env, num_envs=1)
 
@@ -548,7 +602,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
       @property
       def mj_model(self):
-        return self._env.mj_model
+        # Return the actual MyoSuite model stored during initialization
+        # This is the model from the unwrapped MyoSuite environment, not the wrapper
+        return self._mj_model
 
         @property
         def mj_data(self):
