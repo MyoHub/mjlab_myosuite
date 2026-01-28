@@ -7,6 +7,8 @@ For MyoSuite tasks, this script patches mjlab's run_play to use gym.make()
 instead of ManagerBasedRlEnv, inheriting all other logic from mjlab.
 """
 
+# ruff: noqa: E402, I001
+
 import time
 
 # Import mjlab_myosuite FIRST to trigger auto-registration of MyoSuite environments
@@ -33,12 +35,54 @@ except Exception as e:
   # Log but don't fail - registration might have partially completed
   import warnings
 
-  warnings.warn(f"MyoSuite registration warning: {e}", UserWarning)
+  warnings.warn(f"MyoSuite registration warning: {e}", UserWarning, stacklevel=2)
 
 # Now import mjlab's play module and patch run_play for MyoSuite tasks
 from mjlab.envs import ManagerBasedRlEnv
-from mjlab.scripts import play as mjlab_play_module
 from mjlab.tasks.registry import load_env_cfg as mjlab_load_env_cfg
+
+from mjlab.scripts import play as mjlab_play_module
+
+# Patch mjlab primitive creation so dynamic BOX geoms (dice) get textures.
+# This allows ViserPlayViewer to render the dice the same way as the minimal test.
+try:
+  import mujoco as _mujoco  # noqa: F401
+
+  from mjlab.viewer.viser import conversions as _viser_conversions
+  from mjlab_myosuite.viewer_helpers import create_textured_dice_box_mesh
+
+  if not getattr(_viser_conversions, "_myosuite_box_patch", False):
+    _orig_create_primitive_mesh = _viser_conversions.create_primitive_mesh
+
+    def _patched_create_primitive_mesh(mj_model, geom_id):
+      # If this geom is a textured box, return a textured dice mesh (local coords).
+      try:
+        if mj_model.geom_type[geom_id] == _mujoco.mjtGeom.mjGEOM_BOX:
+          # Only patch when a texture exists.
+          matid = int(mj_model.geom_matid[geom_id])
+          texid = -1
+          if 0 <= matid < mj_model.nmat:
+            rgb = int(mj_model.mat_texid[matid, _mujoco.mjtTextureRole.mjTEXROLE_RGB])
+            rgba_tex = int(
+              mj_model.mat_texid[matid, _mujoco.mjtTextureRole.mjTEXROLE_RGBA]
+            )
+            texid = rgb if rgb >= 0 else rgba_tex
+          if texid >= 0:
+            mesh = create_textured_dice_box_mesh(
+              mj_model, geom_id, bake_transform=False
+            )
+            if mesh is not None:
+              return mesh
+      except Exception:
+        pass
+
+      return _orig_create_primitive_mesh(mj_model, geom_id)
+
+    _viser_conversions.create_primitive_mesh = _patched_create_primitive_mesh
+    _viser_conversions._myosuite_box_patch = True
+except Exception:
+  # If patching fails, fall back to mjlab default behavior.
+  pass
 
 # Store the original functions
 _original_run_play = mjlab_play_module.run_play
@@ -236,7 +280,7 @@ def _patched_manager_init(self, cfg, device, render_mode=None):
       # This MUST be done BEFORE _original_manager_init is called
       if not cfg.actions:
         try:
-          from mjlab.managers.action_term import ActionTermCfg
+          from mjlab.managers.action_term import ActionTermCfg  # noqa: F401
 
           from mjlab_myosuite.managers import MyoSuiteActionTermCfg
 
@@ -884,65 +928,103 @@ def _patched_run_play(task_id: str, cfg) -> None:
                 continue
 
               # Iterate over geoms - handle each individually to preserve textures
-              from mjlab.viewer.viser.conversions import mujoco_mesh_to_trimesh
+              from mjlab.viewer.viser.conversions import (
+                mujoco_mesh_to_trimesh,
+              )
 
               nonplane_geom_ids: list[int] = []
               for geom_id in all_geoms:
                 geom_type = self.mj_model.geom_type[geom_id]
                 matid, texid = textured_geom_info.get(geom_id, (-1, -1))
 
-                # Check if this is a mesh geometry (with or without texture)
+                # Check if this is a mesh geometry (actual mesh data)
                 mesh_id = self.mj_model.geom_dataid[geom_id]
                 if mesh_id >= 0 and self.mj_model.mesh_vertnum[mesh_id] > 0:
                   # Mesh geometry - use mujoco_mesh_to_trimesh which preserves textures
-                  try:
-                    mesh = mujoco_mesh_to_trimesh(self.mj_model, geom_id, verbose=False)
-                    # DO NOT TOUCH mesh.visual - MuJoCo already gave us UVs + textures
-                    geom_name = (
-                      mj_id2name(self.mj_model, mjtObj.mjOBJ_GEOM, geom_id)
-                      or f"geom_{geom_id}"
+                  mesh = mujoco_mesh_to_trimesh(self.mj_model, geom_id, verbose=False)
+                  # DO NOT TOUCH mesh.visual - MuJoCo already gave us UVs + textures
+                  geom_name = (
+                    mj_id2name(
+                      self.mj_model,
+                      mjtObj.mjOBJ_GEOM,
+                      geom_id,
                     )
-                    # Apply geom transform (not body transform for individual geoms)
-                    self.server.scene.add_mesh_trimesh(
-                      f"/fixed_bodies/{body_name}/{geom_name}",
-                      mesh,
-                      cast_shadow=False,
-                      receive_shadow=0.2,
-                      position=self.mj_model.geom_pos[geom_id],
-                      wxyz=self.mj_model.geom_quat[geom_id],
-                      visible=True,
+                    or f"geom_{geom_id}"
+                  )
+                  # Apply geom transform (not body transform for individual geoms)
+                  self.server.scene.add_mesh_trimesh(
+                    f"/fixed_bodies/{body_name}/{geom_name}",
+                    mesh,
+                    cast_shadow=False,
+                    receive_shadow=0.2,
+                    position=self.mj_model.geom_pos[geom_id]
+                    + self.mj_model.body_pos[body_id],
+                    wxyz=self.mj_model.geom_quat[geom_id],
+                    visible=True,
+                  )
+                  continue  # Skip adding to nonplane_geom_ids
+
+                # Check if this is a BOX geom or other primitive (with texture support)
+                if geom_type == mjtGeom.mjGEOM_BOX or (
+                  geom_type not in (mjtGeom.mjGEOM_MESH, mjtGeom.mjGEOM_PLANE)
+                  and mesh_id < 0
+                ):
+                  from mjlab_myosuite.viewer_helpers import (
+                    create_primitive_mesh,
+                  )
+
+                  # Create the primitive mesh with texture support
+                  mesh = create_primitive_mesh(self.mj_model, geom_id, matid, texid)
+
+                  geom_name = (
+                    mj_id2name(
+                      self.mj_model,
+                      mjtObj.mjOBJ_GEOM,
+                      geom_id,
                     )
-                    continue  # Skip adding to nonplane_geom_ids
-                  except Exception:
-                    pass  # Fallback to merge_geoms if individual conversion fails
+                    or f"geom_{geom_id}"
+                  )
+                  print(
+                    f"{body_name} -- {geom_name} -- {self.mj_model.geom_pos[geom_id]} -- {self.mj_model.body_pos[body_id]}"
+                  )
+                  self.server.scene.add_mesh_trimesh(
+                    f"/fixed_bodies/{body_name}/{geom_name}",
+                    mesh,
+                    cast_shadow=False,
+                    receive_shadow=0.2,
+                    position=self.mj_model.geom_pos[geom_id]
+                    + self.mj_model.body_pos[body_id],
+                    wxyz=self.mj_model.geom_quat[geom_id],
+                    visible=True,
+                  )
+                  continue  # Skip adding to nonplane_geom_ids
 
                 # Check if this is a plane with a texture
                 if geom_type == mjtGeom.mjGEOM_PLANE:
                   if texid >= 0:
                     # Textured plane - add as mesh instead of grid
-                    try:
-                      mesh = create_textured_plane(self.mj_model, geom_id, matid, texid)
-                      if mesh is not None:
-                        geom_name = (
-                          mj_id2name(
-                            self.mj_model,
-                            mjtObj.mjOBJ_GEOM,
-                            geom_id,
-                          )
-                          or f"geom_{geom_id}"
+
+                    mesh = create_textured_plane(self.mj_model, geom_id, matid, texid)
+                    if mesh is not None:
+                      geom_name = (
+                        mj_id2name(
+                          self.mj_model,
+                          mjtObj.mjOBJ_GEOM,
+                          geom_id,
                         )
-                        self.server.scene.add_mesh_trimesh(
-                          f"/fixed_bodies/{body_name}/{geom_name}",
-                          mesh,
-                          cast_shadow=False,
-                          receive_shadow=0.2,
-                          position=self.mj_model.geom_pos[geom_id],
-                          wxyz=self.mj_model.geom_quat[geom_id],
-                          visible=True,
-                        )
-                        continue  # Skip adding as grid
-                    except Exception:
-                      pass  # Fallback to grid if mesh creation fails
+                        or f"geom_{geom_id}"
+                      )
+                      self.server.scene.add_mesh_trimesh(
+                        f"/fixed_bodies/{body_name}/{geom_name}",
+                        mesh,
+                        cast_shadow=False,
+                        receive_shadow=0.2,
+                        position=self.mj_model.geom_pos[geom_id]
+                        + self.mj_model.body_pos[body_id],
+                        wxyz=self.mj_model.geom_quat[geom_id],
+                        visible=True,
+                      )
+                      continue  # Skip adding as grid
 
                   # Untextured plane - add as infinite grid (original behavior)
                   geom_name = (
@@ -956,7 +1038,8 @@ def _patched_run_play(task_id: str, cfg) -> None:
                     infinite_grid=True,
                     fade_distance=50.0,
                     shadow_opacity=0.2,
-                    position=self.mj_model.geom_pos[geom_id],
+                    position=self.mj_model.geom_pos[geom_id]
+                    + self.mj_model.body_pos[body_id],
                     wxyz=self.mj_model.geom_quat[geom_id],
                   )
                 else:
@@ -993,6 +1076,7 @@ def _patched_run_play(task_id: str, cfg) -> None:
         warnings.warn(
           f"Failed to patch ViserMujocoScene for textured planes: {e}",
           UserWarning,
+          stacklevel=2,
         )
         if EnvProtocol is not None:
           ViserPlayViewer(cast(EnvProtocol, env_for_viewer), policy).run()  # type: ignore[arg-type]
