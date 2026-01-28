@@ -4,15 +4,15 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'Makefile'
-      - 'LICENSE'
+      - "**.md"
+      - "Makefile"
+      - "LICENSE"
   pull_request:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'Makefile'
-      - 'LICENSE'
+      - "**.md"
+      - "Makefile"
+      - "LICENSE"
 
 env:
   UV_FROZEN: "1"

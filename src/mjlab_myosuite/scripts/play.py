@@ -33,7 +33,7 @@ except Exception as e:
   # Log but don't fail - registration might have partially completed
   import warnings
 
-  warnings.warn(f"MyoSuite registration warning: {e}", UserWarning)
+  warnings.warn(f"MyoSuite registration warning: {e}", UserWarning, stacklevel=2)
 
 # Now import mjlab's play module and patch run_play for MyoSuite tasks
 from mjlab.envs import ManagerBasedRlEnv
@@ -236,8 +236,6 @@ def _patched_manager_init(self, cfg, device, render_mode=None):
       # This MUST be done BEFORE _original_manager_init is called
       if not cfg.actions:
         try:
-          from mjlab.managers.action_term import ActionTermCfg
-
           from mjlab_myosuite.managers import MyoSuiteActionTermCfg
 
           if MyoSuiteActionTermCfg is not None:
@@ -993,6 +991,7 @@ def _patched_run_play(task_id: str, cfg) -> None:
         warnings.warn(
           f"Failed to patch ViserMujocoScene for textured planes: {e}",
           UserWarning,
+          stacklevel=2,
         )
         if EnvProtocol is not None:
           ViserPlayViewer(cast(EnvProtocol, env_for_viewer), policy).run()  # type: ignore[arg-type]
@@ -1013,8 +1012,8 @@ mjlab_play_module.run_play = _patched_run_play
 
 # Now import and run mjlab's native play script
 # This import happens AFTER registration and patching
-from mjlab.scripts.play import PlayConfig, run_play
-from mjlab.scripts.play import main as mjlab_main
+from mjlab.scripts.play import PlayConfig, run_play  # noqa: E402
+from mjlab.scripts.play import main as mjlab_main  # noqa: E402
 
 # Re-export for backward compatibility with tests and other code
 # Note: mjlab's PlayConfig already has motion_file, so we can use it directly

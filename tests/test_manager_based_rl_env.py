@@ -1,6 +1,5 @@
 """Tests for ManagerBasedRlEnv integration with MyoSuite."""
 
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -53,9 +52,9 @@ def test_myosuite_action_term_cfg():
 def test_manager_based_rl_env_with_myosuite_config():
   """Test that ManagerBasedRlEnv can be created with MyoSuite config."""
   # Import play.py first to trigger the patch
-  import mjlab_myosuite.scripts.play  # noqa: F401
-
   from mjlab.envs import ManagerBasedRlEnv
+
+  import mjlab_myosuite.scripts.play  # noqa: F401
   from mjlab_myosuite.config import MyoSuiteEnvCfg
 
   # Create config
@@ -92,9 +91,9 @@ def test_manager_based_rl_env_with_myosuite_config():
 def test_manager_based_rl_env_observations():
   """Test that ManagerBasedRlEnv can get observations from MyoSuite."""
   # Import play.py first to trigger the patch
-  import mjlab_myosuite.scripts.play  # noqa: F401
-
   from mjlab.envs import ManagerBasedRlEnv
+
+  import mjlab_myosuite.scripts.play  # noqa: F401
   from mjlab_myosuite.config import MyoSuiteEnvCfg
 
   # Create config
@@ -130,11 +129,11 @@ def test_manager_based_rl_env_observations():
 def test_manager_based_rl_env_step():
   """Test that ManagerBasedRlEnv can step with MyoSuite."""
   # Import play.py first to trigger the patch
-  import mjlab_myosuite.scripts.play  # noqa: F401
-
-  from mjlab.envs import ManagerBasedRlEnv
-  from mjlab_myosuite.config import MyoSuiteEnvCfg
   import torch
+  from mjlab.envs import ManagerBasedRlEnv
+
+  import mjlab_myosuite.scripts.play  # noqa: F401
+  from mjlab_myosuite.config import MyoSuiteEnvCfg
 
   # Create config
   cfg = MyoSuiteEnvCfg()
@@ -205,14 +204,13 @@ def test_manager_based_rl_env_step():
 def test_train_with_manager_based_rl_env():
   """Test that training can use ManagerBasedRlEnv for MyoSuite."""
   # Import play.py first to trigger the patch
-  import mjlab_myosuite.scripts.play  # noqa: F401
-
-  from mjlab_myosuite.scripts.train import _patched_run_train
-  from mjlab_myosuite.config import MyoSuiteEnvCfg, get_default_myosuite_rl_cfg
-  from pathlib import Path
   import tempfile
-  from typing import Any
   from dataclasses import dataclass
+  from typing import Any
+
+  import mjlab_myosuite.scripts.play  # noqa: F401
+  from mjlab_myosuite.config import MyoSuiteEnvCfg, get_default_myosuite_rl_cfg
+  from mjlab_myosuite.scripts.train import _patched_run_train
 
   # Create config
   env_cfg = MyoSuiteEnvCfg()
@@ -230,6 +228,7 @@ def test_train_with_manager_based_rl_env():
 
     # Mock the runner to avoid actual training
     from rsl_rl.runners.on_policy_runner import OnPolicyRunner
+
     from mjlab_myosuite.rl.runner import MyoSuiteOnPolicyRunner
 
     with patch.object(OnPolicyRunner, "__init__", return_value=None):
