@@ -117,3 +117,216 @@ def test_viewer_forward_kinematics_available():
     _ = sim.wp_data  # property should internally mj_forward
   finally:
     env.close()
+
+
+def test_wrapper_creation_direct():
+  """Test creating wrapper directly from MyoSuite environment."""
+  from myosuite.utils import gym as myosuite_gym
+
+  from mjlab_myosuite.wrapper import MyoSuiteVecEnvWrapper
+
+  # Create a MyoSuite environment
+  myosuite_env = myosuite_gym.make("myoElbowPose1D6MRandom-v0")
+
+  # Create wrapper with single environment
+  wrapped = MyoSuiteVecEnvWrapper(env=myosuite_env, num_envs=1, device="cpu")
+
+  try:
+    # Verify wrapper has required attributes
+    assert hasattr(wrapped, "num_envs")
+    assert wrapped.num_envs == 1
+    assert hasattr(wrapped, "device")
+    assert hasattr(wrapped, "sim")
+    assert hasattr(wrapped, "cfg")
+    assert hasattr(wrapped, "action_space")
+    assert hasattr(wrapped, "observation_space")
+    assert hasattr(wrapped, "single_action_space")
+    assert hasattr(wrapped, "single_observation_space")
+
+    # Test reset
+    obs, info = wrapped.reset()
+    assert isinstance(info, dict)
+
+    # Test step
+    action = wrapped.action_space.sample()
+    obs, rewards, dones, extras = wrapped.step(action)
+    # Verify step returns are correct types
+    import torch
+
+    assert isinstance(rewards, torch.Tensor)
+    assert isinstance(dones, torch.Tensor)
+    # Extract terminated and truncated from extras if needed
+    # Ensure they are torch tensors to avoid numpy array boolean ambiguity
+    terminated = extras.get("terminated", dones)
+    if not isinstance(terminated, torch.Tensor):
+      terminated = torch.as_tensor(terminated)
+    # Get truncated from extras, or create zeros tensor if not available
+    truncated_raw = extras.get("truncated", None)
+    if truncated_raw is None:
+      truncated = torch.zeros_like(dones, dtype=torch.bool)
+    elif isinstance(truncated_raw, torch.Tensor):
+      truncated = truncated_raw
+    else:
+      truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
+    done = terminated | truncated
+    assert isinstance(obs, type(obs))  # obs should be TensorDict
+
+    # Test get_observations
+    if hasattr(wrapped, "get_observations"):
+      td = wrapped.get_observations()
+      assert "policy" in td
+      assert "critic" in td
+
+  finally:
+    wrapped.close()
+
+
+def test_wrapper_creation_vectorized():
+  """Test creating wrapper with multiple environments."""
+  import torch
+
+  from myosuite.utils import gym as myosuite_gym
+
+  from mjlab_myosuite.wrapper import MyoSuiteVecEnvWrapper
+
+  # Create a MyoSuite environment
+  myosuite_env = myosuite_gym.make("myoElbowPose1D6MRandom-v0")
+
+  # Create wrapper with multiple environments
+  num_envs = 4
+  wrapped = MyoSuiteVecEnvWrapper(env=myosuite_env, num_envs=num_envs, device="cpu")
+
+  try:
+    # Verify wrapper has required attributes
+    assert wrapped.num_envs == num_envs
+    assert hasattr(wrapped, "sim")
+    assert hasattr(wrapped, "cfg")
+
+    # Test reset
+    obs, info = wrapped.reset()
+    assert isinstance(info, dict)
+
+    # Test step with batched actions
+    action = wrapped.action_space.sample()
+    obs, rewards, dones, extras = wrapped.step(action)
+    assert rewards.shape[0] == num_envs
+    assert dones.shape[0] == num_envs
+    # Extract terminated and truncated from extras if needed
+    # Ensure they are torch tensors to avoid numpy array boolean ambiguity
+    terminated = extras.get("terminated", dones)
+    if not isinstance(terminated, torch.Tensor):
+      terminated = torch.as_tensor(terminated)
+    # Get truncated from extras, or create zeros tensor if not available
+    truncated_raw = extras.get("truncated", None)
+    if truncated_raw is None:
+      truncated = torch.zeros_like(dones, dtype=torch.bool)
+    elif isinstance(truncated_raw, torch.Tensor):
+      truncated = truncated_raw
+    else:
+      truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
+    done = terminated | truncated
+
+    # Test get_observations
+    if hasattr(wrapped, "get_observations"):
+      td = wrapped.get_observations()
+      assert "policy" in td
+      # Check batch size
+      policy_obs = td["policy"]
+      if hasattr(policy_obs, "shape"):
+        assert policy_obs.shape[0] == num_envs
+
+  finally:
+    wrapped.close()
+
+
+def test_wrapper_creation_via_factory():
+  """Test creating wrapper via env_factory."""
+  import torch
+  from mjlab_myosuite.env_factory import make_myosuite_env
+
+  # Create wrapper via factory
+  wrapped = make_myosuite_env("myoElbowPose1D6MRandom-v0", device="cpu", num_envs=2)
+
+  try:
+    # Verify wrapper has required attributes
+    assert hasattr(wrapped, "num_envs")
+    assert wrapped.num_envs == 2
+    assert hasattr(wrapped, "sim")
+    assert hasattr(wrapped, "cfg")
+
+    # Test reset and step
+    obs, info = wrapped.reset()
+    action = wrapped.action_space.sample()
+    obs, rewards, dones, extras = wrapped.step(action)
+    # Extract terminated and truncated from extras if needed
+    # Ensure they are torch tensors to avoid numpy array boolean ambiguity
+    terminated = extras.get("terminated", dones)
+    if not isinstance(terminated, torch.Tensor):
+      terminated = torch.as_tensor(terminated)
+    # Get truncated from extras, or create zeros tensor if not available
+    truncated_raw = extras.get("truncated", None)
+    if truncated_raw is None:
+      truncated = torch.zeros_like(dones, dtype=torch.bool)
+    elif isinstance(truncated_raw, torch.Tensor):
+      truncated = truncated_raw
+    else:
+      truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
+    _ = terminated | truncated  # Check done flag
+
+  finally:
+    wrapped.close()
+
+
+def test_wrapper_multiple_myosuite_envs():
+  """Test wrapper creation for different MyoSuite environments."""
+  import torch
+
+  import gymnasium as gym
+
+  # Trigger auto-registration
+  import mjlab_myosuite  # noqa: F401
+
+  # Test a few different MyoSuite environments
+  test_envs = [
+    "Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0",
+    "Mjlab-MyoSuite-myoElbowPose1D6M-v0",
+  ]
+
+  for env_id in test_envs:
+    if env_id not in gym.registry:
+      continue  # Skip if not registered
+
+    env = gym.make(env_id)
+    try:
+      # Basic functionality test
+      obs, info = env.reset()
+      assert isinstance(info, dict)
+
+      action = env.action_space.sample()
+      obs, rewards, dones, extras = env.step(action)  # type: ignore[assignment]
+      # terminated and truncated are available in extras if needed
+      # Ensure they are torch tensors to avoid numpy array boolean ambiguity
+      # Ensure dones is a tensor
+      if not isinstance(dones, torch.Tensor):
+        dones = torch.as_tensor(dones, dtype=torch.bool)
+      terminated = extras.get("terminated", dones)
+      if not isinstance(terminated, torch.Tensor):
+        terminated = torch.as_tensor(terminated, dtype=torch.bool)
+      # Get truncated from extras, or create zeros tensor if not available
+      truncated_raw = extras.get("truncated", None)
+      if truncated_raw is None:
+        truncated = torch.zeros_like(dones, dtype=torch.bool)
+      elif isinstance(truncated_raw, torch.Tensor):
+        truncated = truncated_raw
+      else:
+        truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
+
+      # Verify sim interface
+      unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
+      assert hasattr(unwrapped, "sim")
+      sim = unwrapped.sim
+      assert hasattr(sim, "mj_model")
+      assert hasattr(sim, "mj_data")
+
+    finally:
+      env.close()

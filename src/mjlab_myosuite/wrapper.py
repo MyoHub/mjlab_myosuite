@@ -1,15 +1,119 @@
 """Wrapper for MyoSuite environments to work with mjlab's training infrastructure."""
+
 import copy
+import os
 from typing import Any
+
+# Set MUJOCO_GL=egl early for headless rendering support
+# This must be done BEFORE any MuJoCo imports
+if "MUJOCO_GL" not in os.environ:
+  os.environ["MUJOCO_GL"] = "egl"
 
 import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import vector
 from gymnasium.vector import SyncVectorEnv
-from mjlab.envs import ManagerBasedRlEnvCfg
 from rsl_rl.env import VecEnv
 from tensordict import TensorDict
+
+# ManagerBasedRlEnvCfg is only used for type hints, imported lazily when needed
+
+
+class _MockActionManager:
+  """Mock action manager for ManagerBasedRlEnv compatibility."""
+
+  def __init__(self, action_space, num_envs: int):
+    self.action_space = action_space
+    self.num_envs = num_envs
+    self.active_terms = ["joint_pos"]  # Default action term name
+
+  def get_term(self, name: str):
+    """Get action term by name."""
+
+    # Return a mock action term object
+    class _MockActionTerm:
+      def __init__(self, action_space):
+        self._scale = self._get_action_scale(action_space)
+
+      def _get_action_scale(self, action_space):
+        """Get action scale from action space."""
+        if hasattr(action_space, "low") and hasattr(action_space, "high"):
+          low = np.array(action_space.low)
+          high = np.array(action_space.high)
+          # Return scale as (high - low) / 2
+          scale = (high - low) / 2.0
+          return torch.tensor(scale, dtype=torch.float32)
+        return torch.ones(self._get_action_dim(action_space), dtype=torch.float32)
+
+      def _get_action_dim(self, action_space):
+        """Get action dimension."""
+        if hasattr(action_space, "shape"):
+          return int(np.prod(action_space.shape))
+        return 1
+
+    return _MockActionTerm(self.action_space)
+
+
+class _MockObservationManager:
+  """Mock observation manager for ManagerBasedRlEnv compatibility."""
+
+  def __init__(self, observation_space):
+    self.observation_space = observation_space
+    self.active_terms = {"policy": self._get_observation_names(observation_space)}
+
+  def _get_observation_names(self, observation_space):
+    """Get observation names from observation space."""
+    if isinstance(observation_space, gym.spaces.Dict):
+      if "policy" in observation_space.spaces:
+        policy_space = observation_space.spaces["policy"]
+        if hasattr(policy_space, "shape") and policy_space.shape is not None:
+          dim = int(np.prod(policy_space.shape))
+          return [f"obs_{i}" for i in range(dim)]
+      # Fallback: use first space
+      if observation_space.spaces:
+        first_space = next(iter(observation_space.spaces.values()))
+        if hasattr(first_space, "shape") and first_space.shape is not None:
+          dim = int(np.prod(first_space.shape))
+          return [f"obs_{i}" for i in range(dim)]
+    elif hasattr(observation_space, "shape") and observation_space.shape is not None:
+      dim = int(np.prod(observation_space.shape))
+      return [f"obs_{i}" for i in range(dim)]
+    return ["obs_0"]
+
+
+class _MockCommandManager:
+  """Mock command manager for ManagerBasedRlEnv compatibility."""
+
+  def __init__(self):
+    self.active_terms = []  # MyoSuite doesn't use commands by default
+
+
+class _MockScene:
+  """Mock scene for ManagerBasedRlEnv compatibility."""
+
+  def __init__(self, num_envs: int):
+    self.num_envs = num_envs
+
+  def __getitem__(self, key: str):
+    """Get entity by name (returns mock robot entity)."""
+
+    # Return a mock robot entity
+    class _MockRobot:
+      def __init__(self):
+        self.joint_names = []  # Will be populated if needed
+        self.spec = _MockSpec()
+        self.data = _MockData()
+
+    class _MockSpec:
+      def __init__(self):
+        self.actuators = []  # Empty actuators list
+
+    class _MockData:
+      def __init__(self):
+        self.default_joint_pos = torch.zeros(1, 0)  # Empty default positions
+
+    return _MockRobot()
 
 
 class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
@@ -34,6 +138,7 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     num_envs: int | None = None,
     device: str | torch.device = "cpu",
     clip_actions: float | None = None,
+    render_mode: str | None = None,
   ):
     """Initialize the wrapper.
 
@@ -42,9 +147,20 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       num_envs: Number of environments (if env is single, will vectorize)
       device: Device to use for tensors
       clip_actions: Optional action clipping value
+      render_mode: Render mode for the environment (e.g., "rgb_array" for video recording)
     """
     # Initialize gym.Env parent (no-op but required for proper inheritance)
     gym.Env.__init__(self)
+
+    # Store render_mode as an attribute (required for RecordVideo wrapper)
+    self._render_mode = render_mode or getattr(env, "render_mode", None)
+
+    # Note: MUJOCO_GL=egl is set at module level for headless rendering support
+
+    # Initialize offline renderer lazily (after scene is created)
+    # We'll initialize it in render() or after _setup_manager_compatibility()
+    self._offline_renderer = None
+    self._offline_renderer_initialized = False
 
     self.clip_actions = clip_actions
 
@@ -144,6 +260,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       # Try to get shape attribute
       self.num_actions = int(np.prod(getattr(self.single_action_space, "shape", (1,))))
 
+    # Create mock managers for ManagerBasedRlEnv compatibility (needed for ONNX export)
+    self._setup_manager_compatibility()
+
     # Estimate max episode length (MyoSuite environments typically have timeout)
     # Default to 1000 steps if not available
     unwrapped_env = env.unwrapped if hasattr(env, "unwrapped") else env
@@ -187,6 +306,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     # MyoSuite environments have mj_model and mj_data directly on the unwrapped env
     self._mock_sim = self._create_mock_sim()
 
+    # Create mock managers for ManagerBasedRlEnv compatibility (needed for ONNX export)
+    self._setup_manager_compatibility()
+
     # Modify action space if clipping is enabled
     self._modify_action_space()
 
@@ -229,6 +351,33 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     if myosuite_env is None:
       raise RuntimeError("Failed to unwrap underlying MyoSuite environment")
 
+    # For mjx/warp versions, check if mj_model and mj_data are accessible
+    # They might be accessed differently in mjx/warp versions
+    if not hasattr(myosuite_env, "mj_model"):
+      # Try alternative access patterns for mjx/warp
+      if hasattr(myosuite_env, "model"):
+        # Some versions use 'model' instead of 'mj_model'
+        myosuite_env.mj_model = myosuite_env.model  # type: ignore[attr-defined]
+      elif hasattr(myosuite_env, "_model"):
+        myosuite_env.mj_model = myosuite_env._model  # type: ignore[attr-defined]
+      else:
+        raise RuntimeError(
+          "MyoSuite environment does not have mj_model attribute. "
+          "This may indicate an incompatible MyoSuite version."
+        )
+
+    if not hasattr(myosuite_env, "mj_data"):
+      # Try alternative access patterns for mjx/warp
+      if hasattr(myosuite_env, "data"):
+        myosuite_env.mj_data = myosuite_env.data  # type: ignore[attr-defined]
+      elif hasattr(myosuite_env, "_data"):
+        myosuite_env.mj_data = myosuite_env._data  # type: ignore[attr-defined]
+      else:
+        raise RuntimeError(
+          "MyoSuite environment does not have mj_data attribute. "
+          "This may indicate an incompatible MyoSuite version."
+        )
+
     # Create a mock wp_data object that provides numpy arrays from mj_data
     class MockWpData:
       """Mock wp_data that converts mj_data arrays to the format Viser expects."""
@@ -239,13 +388,13 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
       @property
       def _mj_model(self):
-        """Access mj_model dynamically from environment."""
-        return self._env.mj_model
+        """Access mj_model dynamically from environment, supporting mjx/warp versions."""
+        return getattr(self._env, "mj_model", getattr(self._env, "model", None))
 
       @property
       def _mj_data(self):
-        """Access mj_data dynamically from environment to ensure it's always current."""
-        return self._env.mj_data
+        """Access mj_data dynamically from environment, supporting mjx/warp versions."""
+        return getattr(self._env, "mj_data", getattr(self._env, "data", None))
 
       def _to_batched(self, arr: np.ndarray) -> np.ndarray:
         """Convert a 1D or 2D array to batched format (batch_size, ...)"""
@@ -275,11 +424,15 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       @property
       def qpos(self):
         """Joint positions. Shape: (batch_size, nq)"""
+        if self._mj_data is None:
+          raise RuntimeError("mj_data is not available")
         return self._make_array_proxy(self._mj_data.qpos)
 
       @property
       def qvel(self):
         """Joint velocities. Shape: (batch_size, nv)"""
+        if self._mj_data is None:
+          raise RuntimeError("mj_data is not available")
         return self._make_array_proxy(self._mj_data.qvel)
 
       @property
@@ -290,6 +443,8 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
         # forward kinematics are computed for visualization
         import mujoco
 
+        if self._mj_model is None or self._mj_data is None:
+          raise RuntimeError("mj_model or mj_data is not available")
         mujoco.mj_forward(self._mj_model, self._mj_data)  # type: ignore[attr-defined]
         # xpos is shape (nbody, 3), we need to add batch dimension
         xpos_array = self._mj_data.xpos
@@ -301,6 +456,8 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
         # Ensure mj_forward has been called to update xmat
         import mujoco
 
+        if self._mj_model is None or self._mj_data is None:
+          raise RuntimeError("mj_model or mj_data is not available")
         mujoco.mj_forward(self._mj_model, self._mj_data)  # type: ignore[attr-defined]
         # xmat is shape (nbody, 9), reshape to (nbody, 3, 3), then add batch dimension
         xmat_array = self._mj_data.xmat.reshape(-1, 3, 3)
@@ -312,6 +469,8 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
         # Ensure mj_forward has been called to update geom_xpos
         import mujoco
 
+        if self._mj_model is None or self._mj_data is None:
+          raise RuntimeError("mj_model or mj_data is not available")
         mujoco.mj_forward(self._mj_model, self._mj_data)  # type: ignore[attr-defined]
         # geom_xpos is shape (ngeom, 3), we need to add batch dimension
         return self._make_array_proxy(self._mj_data.geom_xpos)
@@ -322,6 +481,8 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
         # Ensure mj_forward has been called to update geom_xmat
         import mujoco
 
+        if self._mj_model is None or self._mj_data is None:
+          raise RuntimeError("mj_model or mj_data is not available")
         mujoco.mj_forward(self._mj_model, self._mj_data)  # type: ignore[attr-defined]
         # geom_xmat is shape (ngeom, 9), reshape to (ngeom, 3, 3), then add batch dimension
         return self._make_array_proxy(self._mj_data.geom_xmat.reshape(-1, 3, 3))
@@ -329,6 +490,8 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       @property
       def mocap_pos(self):
         """Mocap positions. Shape: (batch_size, nmocap, 3)"""
+        if self._mj_model is None or self._mj_data is None:
+          raise RuntimeError("mj_model or mj_data is not available")
         if self._mj_model.nmocap > 0:
           return self._make_array_proxy(self._mj_data.mocap_pos)
         else:
@@ -339,6 +502,8 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       @property
       def mocap_quat(self):
         """Mocap quaternions. Shape: (batch_size, nmocap, 4)"""
+        if self._mj_model is None or self._mj_data is None:
+          raise RuntimeError("mj_model or mj_data is not available")
         if self._mj_model.nmocap > 0:
           return self._make_array_proxy(self._mj_data.mocap_quat)
         else:
@@ -348,41 +513,115 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
     # Create a mock sim object that inherits from Simulation to pass isinstance checks
     # We need to import Simulation here to avoid circular imports
+    # Use lazy import to avoid triggering mjlab import chain issues
     try:
       from mjlab.sim.sim import Simulation as _SimulationBase
+    except (ImportError, AttributeError):
+      # If Simulation import fails, use fallback
+      _SimulationBase = object
 
-      class MockSimPrimary(_SimulationBase):  # type: ignore[misc]
-        """Mock Simulation that works with MyoSuite environments.
+    class MockSimPrimary(_SimulationBase):  # type: ignore[misc]
+      """Mock Simulation that works with MyoSuite environments.
 
-        This class inherits from Simulation to pass isinstance checks,
-        but bypasses the normal __init__ to avoid MuJoCo Warp requirements.
-        """
+      This class inherits from Simulation to pass isinstance checks,
+      but bypasses the normal __init__ to avoid MuJoCo Warp requirements.
+      """
 
-        def __init__(self, env):
-          # Don't call super().__init__() - we're bypassing MuJoCo Warp setup
-          # Instead, set up minimal attributes needed for compatibility
-          self._env = env
-          self._mj_model = env.mj_model
-          self._mj_data = env.mj_data
-          self._wp_data = MockWpData(env, num_envs=1)
+      def __init__(self, env):
+        # Don't call super().__init__() - we're bypassing MuJoCo Warp setup
+        # Instead, set up minimal attributes needed for compatibility
+        self._env = (
+          env  # This is the wrapped env (SyncVectorEnv), keep for compatibility
+        )
+        # Get the actual unwrapped MyoSuite environment for model access
+        myosuite_env = env
+        # Unwrap to get the actual MyoSuite environment
+        while (
+          myosuite_env is not None
+          and hasattr(myosuite_env, "unwrapped")
+          and myosuite_env.unwrapped is not myosuite_env
+        ):
+          myosuite_env = myosuite_env.unwrapped
 
-          # Set minimal attributes that Simulation expects
-          self.num_envs = 1
-          self.device = "cpu"  # MyoSuite runs on CPU
-          # Set cfg to None or a minimal object if needed
-          self.cfg = None
+        # Also check if it's a VectorEnv and get the first env
+        if hasattr(myosuite_env, "envs") and len(myosuite_env.envs) > 0:
+          myosuite_env = myosuite_env.envs[0]
+          while (
+            myosuite_env is not None
+            and hasattr(myosuite_env, "unwrapped")
+            and myosuite_env.unwrapped is not myosuite_env
+          ):
+            myosuite_env = myosuite_env.unwrapped
 
-        @property
-        def mj_model(self):
-          return self._env.mj_model
+        # Store the actual MyoSuite environment for model access
+        self._myosuite_env = myosuite_env
+
+        # Support both standard and mjx/warp versions
+        # Get model from the actual MyoSuite environment
+        self._mj_model = None
+        if myosuite_env is not None:
+          self._mj_model = getattr(
+            myosuite_env, "mj_model", getattr(myosuite_env, "model", None)
+          )
+          if self._mj_model is None and hasattr(myosuite_env, "sim"):
+            self._mj_model = getattr(
+              myosuite_env.sim, "mj_model", getattr(myosuite_env.sim, "model", None)
+            )
+
+          # NOTE: Textures are defined in the scene XML but MuJoCo doesn't load them
+          # into the model (ntext=0) because texture file paths are relative and don't
+          # resolve correctly. The snapshot renderer can render textures because it
+          # loads them on-demand. For viser to show textures, we need to ensure the
+          # model is loaded with textures. Since reloading doesn't work (paths still
+          # don't resolve), the issue may be that viser needs the model loaded from
+          # XML with the correct working directory, or it needs texture files to be
+          # accessible via a different mechanism.
+
+        self._mj_data = None
+        if myosuite_env is not None:
+          self._mj_data = getattr(
+            myosuite_env, "mj_data", getattr(myosuite_env, "data", None)
+          )
+          if self._mj_data is None and hasattr(myosuite_env, "sim"):
+            self._mj_data = getattr(
+              myosuite_env.sim, "mj_data", getattr(myosuite_env.sim, "data", None)
+            )
+
+        if self._mj_model is None or self._mj_data is None:
+          raise RuntimeError(
+            "MyoSuite environment must have mj_model/mj_data or model/data attributes. "
+            f"Tried to get from: {type(myosuite_env).__name__ if myosuite_env else 'None'}"
+          )
+        self._wp_data = MockWpData(env, num_envs=1)
+
+        # Set minimal attributes that Simulation expects
+        self.num_envs = 1
+        self.device = "cpu"  # MyoSuite runs on CPU
+        # Set cfg to None or a minimal object if needed
+        self.cfg = None
+
+      @property
+      def mj_model(self):
+        # Return the actual MyoSuite model stored during initialization
+        # This is the model from the unwrapped MyoSuite environment, not the wrapper
+        return self._mj_model
 
         @property
         def mj_data(self):
           """Return mj_data, ensuring forward kinematics are up to date."""
           import mujoco
 
-          mujoco.mj_forward(self._env.mj_model, self._env.mj_data)  # type: ignore[attr-defined]
-          return self._env.mj_data
+          # Support both standard and mjx/warp versions
+          mj_model = getattr(
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
+          )
+          mj_data = getattr(
+            self._env, "mj_data", getattr(self._env, "data", self._mj_data)
+          )
+          mujoco.mj_forward(mj_model, mj_data)  # type: ignore[attr-defined]
+          return mj_data
 
         @property
         def wp_data(self):
@@ -390,44 +629,130 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
           # Ensure forward kinematics are computed before accessing wp_data
           import mujoco
 
-          mujoco.mj_forward(self._env.mj_model, self._env.mj_data)  # type: ignore[attr-defined]
+          # Support both standard and mjx/warp versions
+          mj_model = getattr(
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
+          )
+          mj_data = getattr(
+            self._env, "mj_data", getattr(self._env, "data", self._mj_data)
+          )
+          mujoco.mj_forward(mj_model, mj_data)  # type: ignore[attr-defined]
           return self._wp_data
 
         @property
         def data(self):
-          """Return mj_data for compatibility with sim.data access."""
+          """Return data adapter for compatibility with sim.data access.
+
+          OffscreenRenderer expects data.qpos[env_idx].cpu().numpy(), so we need
+          to provide a torch tensor interface. This adapter wraps mj_data and
+          provides the expected interface.
+          """
           import mujoco
+          import torch
 
-          mujoco.mj_forward(self._env.mj_model, self._env.mj_data)  # type: ignore[attr-defined]
-          return self._env.mj_data
+          # Support both standard and mjx/warp versions
+          mj_model = getattr(
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
+          )
+          mj_data = getattr(
+            self._env, "mj_data", getattr(self._env, "data", self._mj_data)
+          )
+          mujoco.mj_forward(mj_model, mj_data)  # type: ignore[attr-defined]
 
-        # Override methods that might be called but aren't needed
-        def create_graph(self) -> None:
-          """No-op for MyoSuite (no CUDA graphs needed)."""
-          pass
+          # Create an adapter that provides torch tensor interface
+          class DataAdapter:
+            """Adapter to make mj_data look like ManagerBasedRlEnv's sim.data."""
+
+            def __init__(self, mj_data, mj_model):
+              self._mj_data = mj_data
+              self._mj_model = mj_model
+              # nworld is the number of environments (1 for single env)
+              self.nworld = 1
+
+            @property
+            def qpos(self):
+              """Return qpos as torch tensor with batch dimension."""
+              # OffscreenRenderer expects data.qpos[env_idx].cpu().numpy()
+              # So we need shape (1, nq) for batch_size=1
+              qpos_np = self._mj_data.qpos.copy()
+              qpos_tensor = torch.from_numpy(qpos_np).unsqueeze(0)  # Add batch dim
+              return qpos_tensor
+
+            @property
+            def qvel(self):
+              """Return qvel as torch tensor with batch dimension."""
+              qvel_np = self._mj_data.qvel.copy()
+              qvel_tensor = torch.from_numpy(qvel_np).unsqueeze(0)  # Add batch dim
+              return qvel_tensor
+
+            @property
+            def mocap_pos(self):
+              """Return mocap_pos as torch tensor with batch dimension."""
+              if self._mj_model.nmocap > 0:
+                mocap_pos_np = self._mj_data.mocap_pos.copy()
+                return torch.from_numpy(mocap_pos_np).unsqueeze(0)
+              else:
+                # Return empty tensor with correct shape
+                return torch.zeros((1, 0, 3), dtype=torch.float32)
+
+            @property
+            def mocap_quat(self):
+              """Return mocap_quat as torch tensor with batch dimension."""
+              if self._mj_model.nmocap > 0:
+                mocap_quat_np = self._mj_data.mocap_quat.copy()
+                return torch.from_numpy(mocap_quat_np).unsqueeze(0)
+              else:
+                # Return empty tensor with correct shape
+                return torch.zeros((1, 0, 4), dtype=torch.float32)
+
+          return DataAdapter(mj_data, mj_model)
+
+      # Override methods that might be called but aren't needed
+      def create_graph(self) -> None:
+        """No-op for MyoSuite (no CUDA graphs needed)."""
+        pass
 
         def forward(self) -> None:
           """Update forward kinematics for visualization."""
           import mujoco
 
           # Ensure forward kinematics are computed for visualization
-          mujoco.mj_forward(self._env.mj_model, self._env.mj_data)  # type: ignore[attr-defined]
+          # Support both standard and mjx/warp versions
+          mj_model = getattr(
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
+          )
+          mj_data = getattr(
+            self._env, "mj_data", getattr(self._env, "data", self._mj_data)
+          )
+          mujoco.mj_forward(mj_model, mj_data)  # type: ignore[attr-defined]
 
-        def step(self) -> None:
-          """No-op for MyoSuite (step handled by MyoSuite)."""
-          pass
+      def step(self) -> None:
+        """No-op for MyoSuite (step handled by MyoSuite)."""
+        pass
 
+    # Try to create the mock sim
+    try:
       # Create and return the mock sim
       mock_sim = MockSimPrimary(myosuite_env)
-
-    except (ImportError, TypeError):
+    except (TypeError, AttributeError):
       # Fallback: if Simulation import fails or inheritance doesn't work,
       # create a regular class and use __class__ manipulation
       class MockSimFallback:
         def __init__(self, env):
           self._env = env
-          self._mj_model = env.mj_model
-          self._mj_data = env.mj_data
+          # Support both standard and mjx/warp versions
+          self._mj_model = getattr(env, "mj_model", getattr(env, "model", None))
+          self._mj_data = getattr(env, "mj_data", getattr(env, "data", None))
+          if self._mj_model is None or self._mj_data is None:
+            raise RuntimeError(
+              "MyoSuite environment must have mj_model/mj_data or model/data attributes"
+            )
           self._wp_data = MockWpData(env, num_envs=1)
           self.num_envs = 1
           self.device = "cpu"
@@ -435,22 +760,45 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
         @property
         def mj_model(self):
-          return self._env.mj_model
+          # Support both standard and mjx/warp versions
+          return getattr(
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
+          )
 
         @property
         def mj_data(self):
           """Return mj_data, ensuring forward kinematics are up to date."""
           import mujoco
 
-          mujoco.mj_forward(self._env.mj_model, self._env.mj_data)
-          return self._env.mj_data
+          # Support both standard and mjx/warp versions
+          mj_model = getattr(
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
+          )
+          mj_data = getattr(
+            self._env, "mj_data", getattr(self._env, "data", self._mj_data)
+          )
+          mujoco.mj_forward(mj_model, mj_data)
+          return mj_data
 
         @property
         def wp_data(self):
           """Return mock wp_data for Viser viewer compatibility."""
           import mujoco
 
-          mujoco.mj_forward(self._env.mj_model, self._env.mj_data)
+          # Support both standard and mjx/warp versions
+          mj_model = getattr(
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
+          )
+          mj_data = getattr(
+            self._env, "mj_data", getattr(self._env, "data", self._mj_data)
+          )
+          mujoco.mj_forward(mj_model, mj_data)
           return self._wp_data
 
         @property
@@ -458,8 +806,17 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
           """Return mj_data for compatibility with sim.data access."""
           import mujoco
 
-          mujoco.mj_forward(self._env.mj_model, self._env.mj_data)
-          return self._env.mj_data
+          # Support both standard and mjx/warp versions
+          mj_model = getattr(
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
+          )
+          mj_data = getattr(
+            self._env, "mj_data", getattr(self._env, "data", self._mj_data)
+          )
+          mujoco.mj_forward(mj_model, mj_data)
+          return mj_data
 
         def create_graph(self) -> None:
           pass
@@ -468,7 +825,17 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
           """Update forward kinematics for visualization."""
           import mujoco
 
-          mujoco.mj_forward(self._env.mj_model, self._env.mj_data)
+          # Support both standard and mjx/warp versions
+          mj_model = getattr(
+            self._env,
+            "mj_model",
+            getattr(self._env, "model", self._mj_model),
+          )
+          mj_data = getattr(
+            self._env, "mj_data", getattr(self._env, "data", self._mj_data)
+          )
+          if mj_model is not None and mj_data is not None:
+            mujoco.mj_forward(mj_model, mj_data)
 
         def step(self) -> None:
           pass
@@ -487,21 +854,35 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
         object.__setattr__(mock_sim, "__class__", MockSimulationSubclass)
       except (ImportError, TypeError, AttributeError):
         # If this fails, the isinstance check in Viser will use the interface check instead
+        # This is expected if mjlab is not fully installed or has import issues
         pass
 
     return mock_sim
 
-  def _create_mock_cfg(self) -> ManagerBasedRlEnvCfg:
+  def _create_mock_cfg(self) -> Any:
     """Create a mock cfg for compatibility with RslRlVecEnvWrapper."""
     # Create a dataclass-based mock cfg so it can be converted to dict for logging
     from dataclasses import dataclass, field
 
-    from mjlab.viewer import ViewerConfig
+    # Lazy import to avoid triggering mjlab import chain
+    try:
+      from mjlab.viewer.viewer_config import ViewerConfig as MjlabViewerConfig
+
+      ViewerConfigType = MjlabViewerConfig
+    except ImportError:
+      # Fallback if ViewerConfig is not available
+      from dataclasses import dataclass as viewer_dataclass
+
+      @viewer_dataclass
+      class ViewerConfigFallback:  # type: ignore[no-redef]
+        pass
+
+      ViewerConfigType = ViewerConfigFallback
 
     @dataclass
     class MockCfg:
       is_finite_horizon: bool = False
-      viewer: ViewerConfig = field(default_factory=ViewerConfig)
+      viewer: ViewerConfigType = field(default_factory=ViewerConfigType)  # type: ignore[assignment]
 
       def to_dict(self) -> dict:
         """Convert to dictionary for wandb logging."""
@@ -512,9 +893,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     return MockCfg()  # type: ignore[return-value]
 
   @property
-  def cfg(self) -> ManagerBasedRlEnvCfg:
+  def cfg(self) -> Any:
     """Return mock cfg for compatibility."""
-    return self._mock_cfg  # type: ignore[return-value]
+    return self._mock_cfg
 
   @property
   def sim(self) -> Any:
@@ -533,7 +914,199 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
   @property
   def render_mode(self) -> str | None:
     """Get render mode."""
+    # Return stored render_mode if set, otherwise get from underlying env
+    if hasattr(self, "_render_mode") and self._render_mode is not None:
+      return self._render_mode
     return getattr(self.env, "render_mode", None)
+
+  def _initialize_offline_renderer(self):
+    """Initialize offline renderer (called after scene is created)."""
+    if self._offline_renderer_initialized:
+      return
+
+    # Ensure EGL is set up before initializing renderer
+    # (should already be set at module level, but double-check)
+    if "MUJOCO_GL" not in os.environ:
+      os.environ["MUJOCO_GL"] = "egl"
+
+    try:
+      from mjlab.viewer.offscreen_renderer import OffscreenRenderer
+
+      # Get mj_model from the underlying environment
+      myosuite_env = None
+      if isinstance(self.env, vector.VectorEnv):
+        if hasattr(self.env, "envs") and len(self.env.envs) > 0:
+          myosuite_env = self.env.envs[0]
+          while hasattr(myosuite_env, "env") and myosuite_env.env is not myosuite_env:
+            myosuite_env = myosuite_env.env
+      else:
+        myosuite_env = self.env
+
+      mj_model = getattr(myosuite_env, "mj_model", getattr(myosuite_env, "model", None))
+      if mj_model is not None:
+        # Create a minimal viewer config
+        try:
+          from mjlab.viewer.viewer_config import ViewerConfig
+
+          viewer_cfg = ViewerConfig()
+        except ImportError:
+          # Fallback: create a simple config dict
+          from dataclasses import dataclass
+
+          @dataclass
+          class SimpleViewerConfig:
+            height: int = 480
+            width: int = 640
+
+          viewer_cfg = SimpleViewerConfig()
+
+        # Initialize offline renderer (scene should be created by now)
+        # Note: OffscreenRenderer uses mujoco.Renderer internally which requires EGL
+        # Type ignore: Mock objects are compatible with viewer interface
+        self._offline_renderer = OffscreenRenderer(
+          model=mj_model,
+          cfg=viewer_cfg,  # type: ignore[arg-type]
+          scene=self.scene,  # type: ignore[arg-type]
+        )
+        self._offline_renderer.initialize()
+        self._offline_renderer_initialized = True
+    except Exception:
+      # If offline renderer initialization fails, continue without it
+      # render() will return None
+      pass
+
+  def render(self) -> np.ndarray | None:
+    """Render the environment.
+
+    Uses mjlab's OffscreenRenderer (like ManagerBasedRlEnv does) if available,
+    otherwise falls back to the underlying environment's render method.
+    """
+    # Only render if render_mode is set to rgb_array
+    if self.render_mode != "rgb_array":
+      return None
+
+    # Initialize offline renderer lazily if not already done
+    if not self._offline_renderer_initialized:
+      self._initialize_offline_renderer()
+
+    # Use offline renderer if available (like ManagerBasedRlEnv does)
+    if self._offline_renderer is not None:
+      try:
+        # Get mj_data from the underlying environment
+        myosuite_env = None
+        if isinstance(self.env, vector.VectorEnv):
+          if hasattr(self.env, "envs") and len(self.env.envs) > 0:
+            myosuite_env = self.env.envs[0]
+            while hasattr(myosuite_env, "env") and myosuite_env.env is not myosuite_env:
+              myosuite_env = myosuite_env.env
+        else:
+          myosuite_env = self.env
+
+        if myosuite_env is not None:
+          # OffscreenRenderer.update() expects sim.data format with torch tensors
+          # Use our mock sim.data which should provide the right interface
+          if hasattr(self, "sim") and self.sim is not None:
+            try:
+              # Ensure forward kinematics are computed
+              import mujoco
+
+              mj_model = getattr(
+                myosuite_env,
+                "mj_model",
+                getattr(myosuite_env, "model", None),
+              )
+              mj_data = getattr(
+                myosuite_env,
+                "mj_data",
+                getattr(myosuite_env, "data", None),
+              )
+              if mj_model is not None and mj_data is not None:
+                mujoco.mj_forward(mj_model, mj_data)
+
+              # Get sim.data (which should return DataAdapter with torch tensor interface)
+              try:
+                sim_data = self.sim.data
+              except (AttributeError, Exception):
+                # If sim.data fails, create DataAdapter directly from mj_data
+                import torch
+
+                class DataAdapter:
+                  """Adapter to make mj_data look like ManagerBasedRlEnv's sim.data."""
+
+                  def __init__(self, mj_data, mj_model):
+                    self._mj_data = mj_data
+                    self._mj_model = mj_model
+                    # nworld is the number of environments (1 for single env)
+                    self.nworld = 1
+
+                  @property
+                  def qpos(self):
+                    qpos_np = self._mj_data.qpos.copy()
+                    return torch.from_numpy(qpos_np).unsqueeze(0)  # Add batch dim
+
+                  @property
+                  def qvel(self):
+                    qvel_np = self._mj_data.qvel.copy()
+                    return torch.from_numpy(qvel_np).unsqueeze(0)  # Add batch dim
+
+                  @property
+                  def mocap_pos(self):
+                    """Return mocap_pos as torch tensor with batch dimension."""
+                    if self._mj_model.nmocap > 0:
+                      mocap_pos_np = self._mj_data.mocap_pos.copy()
+                      return torch.from_numpy(mocap_pos_np).unsqueeze(0)
+                    else:
+                      # Return empty tensor with correct shape
+                      return torch.zeros((1, 0, 3), dtype=torch.float32)
+
+                  @property
+                  def mocap_quat(self):
+                    """Return mocap_quat as torch tensor with batch dimension."""
+                    if self._mj_model.nmocap > 0:
+                      mocap_quat_np = self._mj_data.mocap_quat.copy()
+                      return torch.from_numpy(mocap_quat_np).unsqueeze(0)
+                    else:
+                      # Return empty tensor with correct shape
+                      return torch.zeros((1, 0, 4), dtype=torch.float32)
+
+                sim_data = DataAdapter(mj_data, mj_model)
+
+              # Update renderer with sim.data (which should have torch tensor interface)
+              self._offline_renderer.update(sim_data)
+              frame = self._offline_renderer.render()
+              if frame is not None:
+                return frame
+            except Exception:
+              # If update fails, continue to fallback
+              pass
+      except Exception:
+        # If offline renderer fails, try fallback
+        pass
+
+    # Fallback: Try underlying environment's render method
+    myosuite_env = None
+    if isinstance(self.env, vector.VectorEnv):
+      if hasattr(self.env, "envs") and len(self.env.envs) > 0:
+        myosuite_env = self.env.envs[0]
+        while hasattr(myosuite_env, "env") and myosuite_env.env is not myosuite_env:
+          myosuite_env = myosuite_env.env
+    else:
+      myosuite_env = self.env
+
+    if myosuite_env is not None and hasattr(myosuite_env, "render"):
+      try:
+        result = myosuite_env.render()
+        if isinstance(result, list) and len(result) > 0:
+          frame = result[0] if isinstance(result[0], np.ndarray) else None
+          if frame is not None:
+            return frame
+        elif isinstance(result, np.ndarray):
+          return result
+      except (NotImplementedError, Exception):
+        pass
+
+    # If all else fails, return None
+    return None
 
   @classmethod
   def class_name(cls) -> str:
@@ -556,6 +1129,18 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     CRITICAL: RSL-RL expects observations on the same device as the policy.
     This method ensures all observation tensors are on self.device.
     """
+    # If _last_obs_dict is empty, we need to reset the environment first
+    # This can happen if get_observations() is called before the first step
+    if not self._last_obs_dict:
+      obs, _ = self.env.reset()
+      self._last_obs_dict = self._convert_obs_to_dict(obs)
+      # Verify that observations are on the correct device after initial conversion
+      for key, value in self._last_obs_dict.items():
+        if isinstance(value, torch.Tensor):
+          if value.device != self.device:
+            # Force move to correct device immediately
+            self._last_obs_dict[key] = value.to(device=self.device)
+
     # Rebuild observation dict, ensuring all tensors are on the correct device
     # This is necessary because tensors might have been created on CPU initially
     obs_dict_on_device = {}
@@ -598,7 +1183,8 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
         if policy_on_device.device != self.device:
           # If still not on device, force it using CUDA or CPU explicit placement
           if str(self.device).startswith("cuda"):
-            policy_on_device = policy_on_device.cuda(device=self.device)
+            device_idx = self.device.index if hasattr(self.device, "index") else 0
+            policy_on_device = policy_on_device.cuda(device=device_idx)  # type: ignore[arg-type]
           else:
             policy_on_device = policy_on_device.cpu()
         td["policy"] = policy_on_device.contiguous()
@@ -612,7 +1198,8 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
           )
           if critic_on_device.device != self.device:
             if str(self.device).startswith("cuda"):
-              critic_on_device = critic_on_device.cuda(device=self.device)
+              device_idx = self.device.index if hasattr(self.device, "index") else 0
+              critic_on_device = critic_on_device.cuda(device=device_idx)  # type: ignore[arg-type]
             else:
               critic_on_device = critic_on_device.cpu()
           td["critic"] = critic_on_device.contiguous()
@@ -637,7 +1224,12 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     if hasattr(self, "_mock_sim") and hasattr(self._mock_sim, "_env"):
       import mujoco
 
-      mujoco.mj_forward(self._mock_sim._env.mj_model, self._mock_sim._env.mj_data)
+      # Support both standard and mjx/warp versions
+      env = self._mock_sim._env
+      mj_model = getattr(env, "mj_model", getattr(env, "model", None))
+      mj_data = getattr(env, "mj_data", getattr(env, "data", None))
+      if mj_model is not None and mj_data is not None:
+        mujoco.mj_forward(mj_model, mj_data)
 
     # Convert to torch tensors and store for get_observations()
     obs_dict = self._convert_obs_to_dict(obs)
@@ -654,7 +1246,11 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
   def step(  # type: ignore[override]
     self, actions: torch.Tensor
   ) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:
-    """Step the environment."""
+    """Step the environment.
+
+    Returns 4 values for rsl_rl compatibility: (obs, rewards, dones, extras)
+    where dones = terminated | truncated.
+    """
     # Convert actions to numpy
     if isinstance(actions, torch.Tensor):
       actions_np = actions.cpu().numpy()
@@ -666,14 +1262,40 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       actions_np = np.clip(actions_np, -self.clip_actions, self.clip_actions)
 
     # Step environment
-    obs, rew, terminated, truncated, info = self.env.step(actions_np)
+    step_result = self.env.step(actions_np)
+
+    # Handle both old and new Gym API
+    if len(step_result) == 4:
+      # old API: obs, reward, done, info
+      obs, rew, done, info = step_result  # type: ignore[misc]
+      terminated = done
+      # Convert False to tensor with same shape as terminated
+      if isinstance(terminated, (bool, np.bool_)):
+        truncated = np.array(False, dtype=bool)
+      elif isinstance(terminated, np.ndarray):
+        truncated = np.zeros_like(terminated, dtype=bool)
+      else:
+        truncated = False
+    elif len(step_result) == 5:
+      # new API: obs, reward, terminated, truncated, info
+      obs, rew, terminated, truncated, info = step_result  # type: ignore[misc]
+      # No need to compute done - we have terminated and truncated separately
+    else:
+      raise ValueError(
+        f"Unexpected number of values returned from env.step: {len(step_result)}"
+      )
 
     # Update forward kinematics for visualization
     # This ensures the viewer has current position data
     if hasattr(self, "_mock_sim") and hasattr(self._mock_sim, "_env"):
       import mujoco
 
-      mujoco.mj_forward(self._mock_sim._env.mj_model, self._mock_sim._env.mj_data)
+      # Support both standard and mjx/warp versions
+      env = self._mock_sim._env
+      mj_model = getattr(env, "mj_model", getattr(env, "model", None))
+      mj_data = getattr(env, "mj_data", getattr(env, "data", None))
+      if mj_model is not None and mj_data is not None:
+        mujoco.mj_forward(mj_model, mj_data)
 
     # Convert to torch tensors and store for get_observations()
     obs_dict = self._convert_obs_to_dict(obs)
@@ -696,18 +1318,20 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     done_mask = terminated_tensor | truncated_tensor
     self.episode_length_buf[done_mask] = 0
 
-    # Combine terminated and truncated
-    term_or_trunc = terminated_tensor | truncated_tensor
-    dones = term_or_trunc.to(dtype=torch.long)
+    # Combine terminated and truncated into dones for rsl_rl compatibility
+    dones_tensor = done_mask
 
-    # Add time_outs to extras
+    # Add time_outs and other info to extras
     extras = info.copy() if isinstance(info, dict) else {}
     extras["time_outs"] = truncated_tensor
+    extras["terminated"] = terminated_tensor
+    extras["truncated"] = truncated_tensor
 
+    # Return 4 values for rsl_rl compatibility: (obs, rewards, dones, extras)
     return (
       TensorDict(obs_dict, batch_size=[self.num_envs]),
       rew_tensor,
-      dones,
+      dones_tensor,
       extras,
     )
 
@@ -768,7 +1392,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
         obs_dict = {}
         for key in obs[0].keys():
           tensor = torch.as_tensor(
-            np.array([o[key] for o in obs]), device=self.device, dtype=torch.float32
+            np.array([o[key] for o in obs]),
+            device=self.device,
+            dtype=torch.float32,
           )
           if key in ["policy", "critic"]:
             obs_dict[key] = tensor
@@ -793,6 +1419,24 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
         policy_obs = torch.tensor(obs, device=self.device, dtype=torch.float32)
       return {"policy": policy_obs, "critic": policy_obs}
 
+  def _setup_manager_compatibility(self):
+    """Set up mock managers for ManagerBasedRlEnv compatibility.
+
+    This allows the environment to work with ONNX export utilities that expect
+    ManagerBasedRlEnv structure (scene, action_manager, observation_manager, etc.).
+    """
+    # Create mock scene
+    self.scene = _MockScene(self.num_envs)
+
+    # Create mock action manager
+    self.action_manager = _MockActionManager(self.single_action_space, self.num_envs)
+
+    # Create mock observation manager
+    self.observation_manager = _MockObservationManager(self.single_observation_space)
+
+    # Create mock command manager
+    self.command_manager = _MockCommandManager()
+
   def close(self) -> None:
     """Close the environment."""
     return self.env.close()
@@ -804,7 +1448,9 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
     if isinstance(self.single_action_space, gym.spaces.Box):
       self.single_action_space = gym.spaces.Box(
-        low=-self.clip_actions, high=self.clip_actions, shape=(self.num_actions,)
+        low=-self.clip_actions,
+        high=self.clip_actions,
+        shape=(self.num_actions,),
       )
       self.action_space = gym.vector.utils.batch_space(
         self.single_action_space, self.num_envs
