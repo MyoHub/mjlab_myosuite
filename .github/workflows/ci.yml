@@ -48,6 +48,7 @@ jobs:
           version: "0.9.7"
       - name: Test with python ${{ matrix.python-version }}
         run: |
+          uv venv
           uv pip install -e .
           uv pip install "myosuite @ git+https://github.com/MyoHub/myosuite.git@mjx"
           uv run --no-default-groups --group cpu --group dev pytest -v
