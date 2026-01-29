@@ -11,6 +11,10 @@ For MyoSuite tasks, this script patches mjlab's run_train to use ManagerBasedRlE
 # This MUST happen before any mjlab imports to ensure registration completes
 # before tyro evaluates choices
 import time
+from dataclasses import dataclass
+
+from mjlab.scripts.train import TrainConfig as MjlabTrainConfig
+from mjlab.scripts.train import main as mjlab_main
 
 try:
   # Force registration to complete by accessing the registry
@@ -33,7 +37,7 @@ except Exception as e:
   # Log but don't fail - registration might have partially completed
   import warnings
 
-  warnings.warn(f"MyoSuite registration warning: {e}", UserWarning)
+  warnings.warn(f"MyoSuite registration warning: {e}", UserWarning, stacklevel=2)
 
 # Import play.py to trigger ManagerBasedRlEnv patch
 # This ensures _patched_manager_init is available when ManagerBasedRlEnv is created
@@ -235,10 +239,6 @@ mjlab_train_module.run_train = _patched_run_train
 # Now import mjlab's native train script
 # Create a custom TrainConfig that extends mjlab's for backward compatibility
 # This adds motion_file parameter that tests and old code expect
-from dataclasses import dataclass
-
-from mjlab.scripts.train import TrainConfig as MjlabTrainConfig
-from mjlab.scripts.train import main as mjlab_main
 
 
 @dataclass(frozen=True)

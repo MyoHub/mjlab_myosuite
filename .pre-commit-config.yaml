@@ -13,10 +13,10 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.10
     hooks:
-      # Lint without breaking commit loop
+      # Lint (match CI expectations)
       - id: ruff-check
-        args: [--exit-zero] # only warn, don’t modify files
-      # Run auto-fixer (optional: manual/CI preferred)
+        args: [--fix]
+      # Format (match CI expectations)
       - id: ruff-format
 
   # 3. Prettier for JS/TS/other assets

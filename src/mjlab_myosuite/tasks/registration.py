@@ -90,8 +90,6 @@ def register_myosuite_tasks():
 
     # Also register tracking tasks
     try:
-      from mjlab.tasks.tracking.rl import MotionTrackingOnPolicyRunner
-
       from ..tasks.tracking.rl import MyoSuiteMotionTrackingOnPolicyRunner
       from ..tasks.tracking.tracking_env_cfg import MyoSuiteTrackingEnvCfg
 
@@ -150,7 +148,9 @@ def register_myosuite_tasks():
       # Log but don't fail
       import warnings
 
-      warnings.warn(f"Failed to register tracking tasks: {e}", UserWarning)
+      warnings.warn(
+        f"Failed to register tracking tasks: {e}", UserWarning, stacklevel=2
+      )
 
   except ImportError:
     # mjlab's native registration not available, fall back to gymnasium registry

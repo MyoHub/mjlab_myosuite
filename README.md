@@ -30,6 +30,7 @@ pip install -e .
 pip install "myosuite @ git+https://github.com/MyoHub/myosuite.git@mjx"
 
 # Or with uv (faster)
+uv venv
 uv pip install -e .
 uv pip install "myosuite @ git+https://github.com/MyoHub/myosuite.git@mjx"
 ```

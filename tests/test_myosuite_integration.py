@@ -168,7 +168,7 @@ def test_wrapper_creation_direct():
       truncated = truncated_raw
     else:
       truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
-    done = terminated | truncated
+    _ = terminated | truncated  # Check done flag
     assert isinstance(obs, type(obs))  # obs should be TensorDict
 
     # Test get_observations
@@ -184,7 +184,6 @@ def test_wrapper_creation_direct():
 def test_wrapper_creation_vectorized():
   """Test creating wrapper with multiple environments."""
   import torch
-
   from myosuite.utils import gym as myosuite_gym
 
   from mjlab_myosuite.wrapper import MyoSuiteVecEnvWrapper
@@ -224,7 +223,7 @@ def test_wrapper_creation_vectorized():
       truncated = truncated_raw
     else:
       truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
-    done = terminated | truncated
+    _ = terminated | truncated  # Check done flag
 
     # Test get_observations
     if hasattr(wrapped, "get_observations"):
@@ -242,6 +241,7 @@ def test_wrapper_creation_vectorized():
 def test_wrapper_creation_via_factory():
   """Test creating wrapper via env_factory."""
   import torch
+
   from mjlab_myosuite.env_factory import make_myosuite_env
 
   # Create wrapper via factory
@@ -279,9 +279,8 @@ def test_wrapper_creation_via_factory():
 
 def test_wrapper_multiple_myosuite_envs():
   """Test wrapper creation for different MyoSuite environments."""
-  import torch
-
   import gymnasium as gym
+  import torch
 
   # Trigger auto-registration
   import mjlab_myosuite  # noqa: F401
@@ -321,6 +320,7 @@ def test_wrapper_multiple_myosuite_envs():
       else:
         truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
 
+      _ = terminated | truncated  # Check done flag
       # Verify sim interface
       unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
       assert hasattr(unwrapped, "sim")

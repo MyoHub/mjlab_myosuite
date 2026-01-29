@@ -1,10 +1,8 @@
 """Unit tests for MyoSuite tracking tasks."""
 
 from pathlib import Path
-from typing import Optional
 
 import pytest
-import torch
 
 
 def _has_myosuite() -> bool:
@@ -39,7 +37,6 @@ def test_tracking_env_cfg_creation():
 
 def test_tracking_env_cfg_motion_file_validation(tmp_path: Path):
   """Test motion file validation in MyoSuiteTrackingEnvCfg."""
-  from dataclasses import fields
   from mjlab_myosuite.tasks.tracking.tracking_env_cfg import MyoSuiteTrackingEnvCfg
 
   # Create a dummy motion file
@@ -69,9 +66,9 @@ def test_tracking_runner_creation():
   """Test creating MyoSuiteMotionTrackingOnPolicyRunner."""
   from dataclasses import asdict
 
-  from mjlab_myosuite.config import get_default_myosuite_rl_cfg
   from myosuite.utils import gym as myosuite_gym
 
+  from mjlab_myosuite.config import get_default_myosuite_rl_cfg
   from mjlab_myosuite.tasks.tracking.rl import MyoSuiteMotionTrackingOnPolicyRunner
   from mjlab_myosuite.wrapper import MyoSuiteVecEnvWrapper
 
@@ -101,9 +98,9 @@ def test_tracking_runner_with_registry_name():
   """Test MyoSuiteMotionTrackingOnPolicyRunner with registry name."""
   from dataclasses import asdict
 
-  from mjlab_myosuite.config import get_default_myosuite_rl_cfg
   from myosuite.utils import gym as myosuite_gym
 
+  from mjlab_myosuite.config import get_default_myosuite_rl_cfg
   from mjlab_myosuite.tasks.tracking.rl import MyoSuiteMotionTrackingOnPolicyRunner
   from mjlab_myosuite.wrapper import MyoSuiteVecEnvWrapper
 
@@ -132,9 +129,9 @@ def test_tracking_runner_save():
   """Test MyoSuiteMotionTrackingOnPolicyRunner.save() method."""
   from dataclasses import asdict
 
-  from mjlab_myosuite.config import get_default_myosuite_rl_cfg
   from myosuite.utils import gym as myosuite_gym
 
+  from mjlab_myosuite.config import get_default_myosuite_rl_cfg
   from mjlab_myosuite.tasks.tracking.rl import MyoSuiteMotionTrackingOnPolicyRunner
   from mjlab_myosuite.wrapper import MyoSuiteVecEnvWrapper
 

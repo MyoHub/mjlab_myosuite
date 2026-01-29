@@ -29,9 +29,9 @@ jobs:
           enable-cache: true
           version: "0.9.7"
       - name: Run lint
-        run: uvx ruff@0.14.3 check --diff
+        run: uvx ruff@0.14.10 check --diff
       - name: Run format
-        run: uvx ruff@0.14.3 format --diff
+        run: uvx ruff@0.14.10 format --diff
 
   tests:
     runs-on: ubuntu-latest
@@ -47,8 +47,11 @@ jobs:
           enable-cache: true
           version: "0.9.7"
       - name: Test with python ${{ matrix.python-version }}
-        run: uv run --no-default-groups --group cpu --group dev pytest
-
+        run: |
+          uv venv
+          uv pip install -e .
+          uv pip install "myosuite @ git+https://github.com/MyoHub/myosuite.git@mjx"
+          uv run --no-default-groups --group cpu --group dev pytest -v
   pyright:
     runs-on: ubuntu-latest
     strategy:
