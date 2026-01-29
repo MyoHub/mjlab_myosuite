@@ -26,6 +26,7 @@ Integration package for using MyoSuite environments with mjlab's training infras
 
 ```bash
 # Install mjlab-myosuite
+uv venv
 pip install -e .
 pip install "myosuite @ git+https://github.com/MyoHub/myosuite.git@mjx"
 
@@ -52,16 +53,16 @@ env.close()
 
 ### 2. Training with mjlab
 
-**Use the mjlab training scripts**:
+**Use the MyoSuite-aware training scripts**:
 
 ```bash
 # Train a policy
-uv run train Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
+uv run myosuite-train Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
     --agent.max-iterations 200 \
     --agent.num-steps-per-env 512
 
 # Play with trained policy
-uv run play Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
+uv run myosuite-play Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
     --checkpoint_file logs/rsl_rl/myosuite/.../model_199.pt
 ```
 
@@ -166,7 +167,7 @@ cfg.commands.motion.motion_file = "path/to/motion.npz"
 
 ```bash
 # Train with motion file from wandb artifact
-uv run train Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0 \
+uv run myosuite-train Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0 \
     --motion-file examples/elbow_sinusoidal_motion.npz     \
     --agent.max-iterations 10000
 ```
@@ -175,7 +176,7 @@ uv run train Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0 \
 
 ```bash
 # Play with motion file
-uv run play Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0 \
+uv run myosuite-play Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0 \
     --checkpoint_file logs/rsl_rl/myosuite/.../model_2000.pt \
     --motion-file path/to/motion.npz
 ```
