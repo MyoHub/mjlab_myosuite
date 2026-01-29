@@ -40,8 +40,8 @@ dependencies = [
   "Source" = "https://github.com/mujocolab/mjlab"
 
 [project.scripts]
-myosuite-train = "mjlab_myosuite.scripts.train:main"
-myosuite-play = "mjlab_myosuite.scripts.play:main"
+train = "mjlab_myosuite.scripts.train:main"
+play = "mjlab_myosuite.scripts.play:main"
 
 [dependency-groups]
 dev = [

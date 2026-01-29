@@ -168,7 +168,7 @@ def test_wrapper_creation_direct():
       truncated = truncated_raw
     else:
       truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
-    terminated | truncated
+    _ = terminated | truncated  # Check done flag
     assert isinstance(obs, type(obs))  # obs should be TensorDict
 
     # Test get_observations
@@ -223,7 +223,7 @@ def test_wrapper_creation_vectorized():
       truncated = truncated_raw
     else:
       truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
-    terminated | truncated
+    _ = terminated | truncated  # Check done flag
 
     # Test get_observations
     if hasattr(wrapped, "get_observations"):
@@ -314,12 +314,13 @@ def test_wrapper_multiple_myosuite_envs():
       # Get truncated from extras, or create zeros tensor if not available
       truncated_raw = extras.get("truncated", None)
       if truncated_raw is None:
-        torch.zeros_like(dones, dtype=torch.bool)
+        truncated = torch.zeros_like(dones, dtype=torch.bool)
       elif isinstance(truncated_raw, torch.Tensor):
-        pass
+        truncated = truncated_raw
       else:
-        torch.as_tensor(truncated_raw, dtype=torch.bool)
+        truncated = torch.as_tensor(truncated_raw, dtype=torch.bool)
 
+      _ = terminated | truncated  # Check done flag
       # Verify sim interface
       unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
       assert hasattr(unwrapped, "sim")

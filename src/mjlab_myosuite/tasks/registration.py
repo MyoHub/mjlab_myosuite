@@ -90,11 +90,6 @@ def register_myosuite_tasks():
 
     # Also register tracking tasks
     try:
-      import importlib.util
-
-      if importlib.util.find_spec("mjlab.tasks.tracking.rl") is None:
-        raise ImportError("mjlab tracking module not available")
-
       from ..tasks.tracking.rl import MyoSuiteMotionTrackingOnPolicyRunner
       from ..tasks.tracking.tracking_env_cfg import MyoSuiteTrackingEnvCfg
 

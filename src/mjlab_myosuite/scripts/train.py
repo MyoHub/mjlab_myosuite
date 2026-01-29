@@ -11,6 +11,10 @@ For MyoSuite tasks, this script patches mjlab's run_train to use ManagerBasedRlE
 # This MUST happen before any mjlab imports to ensure registration completes
 # before tyro evaluates choices
 import time
+from dataclasses import dataclass
+
+from mjlab.scripts.train import TrainConfig as MjlabTrainConfig
+from mjlab.scripts.train import main as mjlab_main
 
 try:
   # Force registration to complete by accessing the registry
@@ -235,10 +239,6 @@ mjlab_train_module.run_train = _patched_run_train
 # Now import mjlab's native train script
 # Create a custom TrainConfig that extends mjlab's for backward compatibility
 # This adds motion_file parameter that tests and old code expect
-from dataclasses import dataclass  # noqa: E402
-
-from mjlab.scripts.train import TrainConfig as MjlabTrainConfig  # noqa: E402
-from mjlab.scripts.train import main as mjlab_main  # noqa: E402
 
 
 @dataclass(frozen=True)
