@@ -48,7 +48,8 @@ class MyoSuiteTrackingEnvCfg(MyoSuiteEnvCfg):
       >>> cfg.num_envs = 4096
       >>> cfg.device = "cuda:0"
       >>> cfg.commands.motion.motion_file = "path/to/motion.npz"
-      >>> env = gym.make("Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0", cfg=cfg)
+      >>> from mjlab_myosuite.tasks.tracking.env_factory import make_myosuite_tracking_env
+      >>> env = make_myosuite_tracking_env("myoElbowPose1D6MRandom-v0", cfg=cfg)
   """
 
   commands: CommandsCfg = field(default_factory=CommandsCfg)

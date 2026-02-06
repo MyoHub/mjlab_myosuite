@@ -1,43 +1,15 @@
-"""Wrapper script for mjlab native train script with MyoSuite environment registration.
+"""Wrapper script for mjlab native train script with MyoSuite support.
 
-This script ensures MyoSuite environments are registered before mjlab's native
-train script runs, allowing MyoSuite tasks to be used with mjlab's native CLI.
-
-For MyoSuite tasks, this script patches mjlab's run_train to use ManagerBasedRlEnv
-(with MyoSuite wrapper), inheriting all other logic from mjlab.
+Registers MyoSuite tasks with mjlab and patches run_train so MyoSuite tasks
+use ManagerBasedRlEnv wrapping envs created via make_myosuite_env_from_task_id().
 """
 
-# Import mjlab_myosuite FIRST to trigger auto-registration of MyoSuite environments
-# This MUST happen before any mjlab imports to ensure registration completes
-# before tyro evaluates choices
-import time
 from dataclasses import dataclass
 
 from mjlab.scripts.train import TrainConfig as MjlabTrainConfig
 from mjlab.scripts.train import main as mjlab_main
 
-try:
-  # Force registration to complete by accessing the registry
-  import gymnasium as gym
-
-  import mjlab_myosuite  # noqa: F401
-
-  # Trigger registration multiple times to ensure it completes
-  for _ in range(3):
-    _ = list(gym.registry.keys())  # Trigger any lazy registration
-    time.sleep(0.1)
-
-  # Verify MyoSuite environments are registered
-  myosuite_tasks = [k for k in gym.registry.keys() if "Mjlab-MyoSuite" in k]
-  if myosuite_tasks:
-    print(f"[INFO] Registered {len(myosuite_tasks)} MyoSuite environments")
-except ImportError:
-  pass  # MyoSuite not available, skip registration
-except Exception as e:
-  # Log but don't fail - registration might have partially completed
-  import warnings
-
-  warnings.warn(f"MyoSuite registration warning: {e}", UserWarning, stacklevel=2)
+import mjlab_myosuite  # noqa: F401  # Trigger mjlab task registration
 
 # Import play.py to trigger ManagerBasedRlEnv patch
 # This ensures _patched_manager_init is available when ManagerBasedRlEnv is created
@@ -56,12 +28,9 @@ _original_run_train = mjlab_train_module.run_train
 
 
 def _patched_run_train(task_id: str, cfg, log_dir: Path) -> None:
-  """Patched run_train that uses ManagerBasedRlEnv for MyoSuite tasks.
+  """Patched run_train for MyoSuite tasks.
 
-  This function inherits all logic from mjlab's original run_train, but
-  uses ManagerBasedRlEnv (with MyoSuite wrapper) for MyoSuite tasks instead
-  of directly using gym.make(). The ManagerBasedRlEnv is patched to wrap
-  the MyoSuite environment.
+  Uses ManagerBasedRlEnv (patched to create env via make_myosuite_env_from_task_id).
   """
   # Check if this is a MyoSuite task
   if task_id.startswith("Mjlab-MyoSuite"):

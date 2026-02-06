@@ -160,3 +160,56 @@ def make_myosuite_env(
     wrapped_env.spec = myosuite_env.spec
 
   return wrapped_env
+
+
+def task_id_to_myosuite_id(task_id: str) -> tuple[str, bool]:
+  """Parse mjlab MyoSuite task_id into base env id and tracking flag.
+
+  Args:
+    task_id: e.g. "Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0" or
+      "Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0"
+
+  Returns:
+    (myosuite_env_id, is_tracking), e.g. ("myoElbowPose1D6MRandom-v0", False).
+  """
+  if not task_id.startswith("Mjlab-MyoSuite"):
+    return task_id, False
+  rest = task_id[len("Mjlab-MyoSuite-") :]
+  if rest.startswith("Tracking-"):
+    return rest[len("Tracking-") :], True
+  return rest, False
+
+
+def make_myosuite_env_from_task_id(
+  task_id: str,
+  cfg=None,
+  device: str = "cpu",
+  render_mode: str | None = None,
+  num_envs: int | None = None,
+  **kwargs,
+) -> MyoSuiteVecEnvWrapper:
+  """Create a wrapped MyoSuite env from mjlab task_id (e.g. Mjlab-MyoSuite-...).
+
+  Use this when you have a task_id from the CLI or mjlab registry; for direct
+  creation prefer make_myosuite_env(myosuite_env_id, ...).
+  """
+  myosuite_env_id, is_tracking = task_id_to_myosuite_id(task_id)
+  if is_tracking:
+    from .tasks.tracking.env_factory import make_myosuite_tracking_env
+
+    return make_myosuite_tracking_env(
+      myosuite_env_id=myosuite_env_id,
+      cfg=cfg,
+      device=device,
+      render_mode=render_mode,
+      num_envs=num_envs,
+      **kwargs,
+    )
+  return make_myosuite_env(
+    myosuite_env_id=myosuite_env_id,
+    cfg=cfg,
+    device=device,
+    render_mode=render_mode,
+    num_envs=num_envs,
+    **kwargs,
+  )

@@ -19,7 +19,7 @@ Integration package for using MyoSuite environments with mjlab's training infras
 - ✅ **Automatic Registration**: All MyoSuite environments are automatically registered with mjlab
 - ✅ **MJX/Warp Support**: Compatible with both standard MyoSuite and mjx/warp GPU-accelerated versions
 - ✅ **Native mjlab Integration**: Uses mjlab's native task registration when available
-- ✅ **Backward Compatible**: Falls back to gymnasium registry if mjlab native registration unavailable
+- ✅ **Factory API**: Create envs with `make_myosuite_env()` (no gym registration required)
 - ✅ **Full Test Coverage**: Comprehensive unit tests for all functionality
 
 ## Installation
@@ -37,14 +37,13 @@ uv pip install "myosuite @ git+https://github.com/MyoHub/myosuite.git@mjx"
 
 ## Quick Start
 
-### 1. Basic Usage (gym based)
+### 1. Basic Usage
 
 ```python
-import gymnasium as gym
-import mjlab_myosuite  # Auto-registers all MyoSuite environments
+from mjlab_myosuite.env_factory import make_myosuite_env
 
 # Create a MyoSuite environment wrapped for mjlab
-env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0")
+env = make_myosuite_env("myoElbowPose1D6MRandom-v0")
 obs, info = env.reset()
 action = env.action_space.sample()
 obs, rewards, dones, extras = env.step(action)
@@ -188,11 +187,11 @@ The tracking runner (`MyoSuiteMotionTrackingOnPolicyRunner`) extends the base My
 The `playback_with_viser` utility provides a convenient way to visualize policy execution using the Viser web-based viewer:
 
 ```python
+from mjlab_myosuite.env_factory import make_myosuite_env
 from scripts.play import playback_with_viser
-import gymnasium as gym
 
 # Create environment and policy
-env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0")
+env = make_myosuite_env("myoElbowPose1D6MRandom-v0")
 policy = load_policy("path/to/checkpoint.pt")
 
 # Playback with Viser

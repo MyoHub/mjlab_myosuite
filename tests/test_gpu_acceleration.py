@@ -26,18 +26,14 @@ pytestmark = pytest.mark.skipif(
 
 def test_gpu_acceleration_observations():
   """Test that observations are on GPU when device is set to cuda:0."""
-  import gymnasium as gym
-
-  # Trigger auto-registration
-  import mjlab_myosuite  # noqa: F401
   from mjlab_myosuite.config import MyoSuiteEnvCfg
+  from mjlab_myosuite.env_factory import make_myosuite_env
 
-  # Create environment with GPU device
   cfg = MyoSuiteEnvCfg()
   cfg.device = "cuda:0"
-  cfg.num_envs = 4  # Use multiple envs to test batching
+  cfg.num_envs = 4
 
-  env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0", cfg=cfg)
+  env = make_myosuite_env("myoElbowPose1D6MRandom-v0", cfg=cfg)
 
   try:
     # Verify wrapper device is set correctly
@@ -108,18 +104,14 @@ def test_gpu_acceleration_observations():
 
 def test_gpu_acceleration_simulation_data():
   """Test that simulation data structures are accessible and potentially on GPU for mjx/warp versions."""
-  import gymnasium as gym
-
-  # Trigger auto-registration
-  import mjlab_myosuite  # noqa: F401
   from mjlab_myosuite.config import MyoSuiteEnvCfg
+  from mjlab_myosuite.env_factory import make_myosuite_env
 
-  # Create environment with GPU device
   cfg = MyoSuiteEnvCfg()
   cfg.device = "cuda:0"
   cfg.num_envs = 2
 
-  env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0", cfg=cfg)
+  env = make_myosuite_env("myoElbowPose1D6MRandom-v0", cfg=cfg)
 
   try:
     unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
@@ -150,18 +142,14 @@ def test_gpu_acceleration_simulation_data():
 
 def test_gpu_acceleration_batched_environments():
   """Test that batched environments work correctly with GPU acceleration."""
-  import gymnasium as gym
-
-  # Trigger auto-registration
-  import mjlab_myosuite  # noqa: F401
   from mjlab_myosuite.config import MyoSuiteEnvCfg
+  from mjlab_myosuite.env_factory import make_myosuite_env
 
-  # Create environment with multiple parallel environments on GPU
   cfg = MyoSuiteEnvCfg()
   cfg.device = "cuda:0"
-  cfg.num_envs = 8  # Use more envs to test batching
+  cfg.num_envs = 8
 
-  env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0", cfg=cfg)
+  env = make_myosuite_env("myoElbowPose1D6MRandom-v0", cfg=cfg)
 
   try:
     unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env

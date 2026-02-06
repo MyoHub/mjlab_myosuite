@@ -30,13 +30,14 @@ class MyoSuiteEnvCfg:
 
   Note: This config includes minimal attributes required by ManagerBasedRlEnvCfg
   for compatibility with mjlab's native scripts, but MyoSuite environments are
-  actually created via gym.make(), not ManagerBasedRlEnv directly.
+  created via make_myosuite_env() or make_myosuite_env_from_task_id(), not ManagerBasedRlEnv directly.
 
   Example:
+      >>> from mjlab_myosuite.env_factory import make_myosuite_env
       >>> cfg = MyoSuiteEnvCfg()
       >>> cfg.num_envs = 4096  # For training
       >>> cfg.device = "cuda:0"  # Use GPU
-      >>> env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0", cfg=cfg)
+      >>> env = make_myosuite_env("myoElbowPose1D6MRandom-v0", cfg=cfg)
   """
 
   num_envs: int = 1
@@ -53,7 +54,7 @@ class MyoSuiteEnvCfg:
 
   # Minimal attributes required by ManagerBasedRlEnvCfg for compatibility
   # These are stubs - MyoSuite environments don't actually use these
-  # MyoSuite tasks are routed to custom training logic that uses gym.make()
+  # MyoSuite tasks are routed to custom training logic that uses make_myosuite_env_from_task_id()
   decimation: int = 1
   """Decimation (stub for ManagerBasedRlEnvCfg compatibility)."""
   scene: Any = None
