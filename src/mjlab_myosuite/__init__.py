@@ -5,7 +5,9 @@
 - Create envs with make_myosuite_env() or make_myosuite_env_from_task_id()
 """
 
+from .config import MyoSuiteEnvCfg, PhysicsBackend
 from .env_factory import (
+  detect_physics_backend,
   make_myosuite_env,
   make_myosuite_env_from_task_id,
   task_id_to_myosuite_id,
@@ -41,7 +43,10 @@ except Exception as e:
   )
 
 __all__ = [
+  "MyoSuiteEnvCfg",
   "MyoSuiteVecEnvWrapper",
+  "PhysicsBackend",
+  "detect_physics_backend",
   "get_myosuite_env_ids",
   "make_myosuite_env",
   "make_myosuite_env_from_task_id",

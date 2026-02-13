@@ -1,10 +1,25 @@
 """Default configuration generators for MyoSuite environments."""
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
   pass
+
+
+class PhysicsBackend(str, Enum):
+  """Physics simulation backend for MyoSuite.
+
+  Aligns with mjlab's backend abstraction: CPU (standard MuJoCo) or WARP
+  (GPU-accelerated via mujoco_warp, when using MyoSuite from the mjx branch).
+  See: https://github.com/MyoHub/myosuite/tree/mjx
+  """
+
+  CPU = "cpu"
+  """Standard MuJoCo on CPU; tensors shuttled to GPU via pinned memory + non_blocking."""
+  WARP = "warp"
+  """GPU sim via mujoco_warp (MyoSuite mjx branch); zero-copy bridge when available."""
 
 
 # Lazy import to avoid circular dependencies
@@ -44,6 +59,8 @@ class MyoSuiteEnvCfg:
   """Number of parallel environments. Use 4096+ for GPU training."""
   device: str = "cpu"
   """Device to use. Set to 'cuda:0' for GPU-accelerated MyoSuite (mjx/warp versions)."""
+  physics_backend: PhysicsBackend = PhysicsBackend.CPU
+  """Physics backend: CPU (default) or WARP. WARP uses MyoSuite mjx branch when available."""
   commands: Any = None
   """Command configuration for tracking tasks. None for non-tracking tasks.
 

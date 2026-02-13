@@ -4,10 +4,10 @@ Benchmark suite for mjlab_myosuite: throughput, GPU scaling, and mjlab compariso
 Verifies that mjlab_myosuite and (when available) native mjlab / myosuite-mjx
 use GPUs and scale similarly with num_envs.
 
-With --device cuda:0, GPU peak memory is reported. With standard MyoSuite (CPU physics),
-only observation and reward tensors are on GPU, so usage is small (often <1 MB) and
-nvidia-smi may show little change. For large GPU memory use, install MyoSuite from the
-mjx branch and use --with-warp (GPU simulation).
+With --device cuda:0, the data path is mujoco_warp (Warp bridge) when warp-lang is
+installed, else pinned transfer. GPU peak memory is reported. Install warp-lang for
+the zero-copy Warp bridge (e.g. uv add warp-lang). For GPU simulation use MyoSuite
+mjx branch and --with-warp.
 
 Usage:
   uv run python benchmarks/run_benchmarks.py
@@ -57,6 +57,35 @@ def _gpu_memory_mb() -> tuple[float, float] | None:
     return None
 
 
+def _gpu_used_mb_nvidia_smi() -> float | None:
+  """Return this process's GPU memory used (MB) via nvidia-smi. Includes Warp allocator."""
+  import os
+  import subprocess
+
+  try:
+    pid = os.getpid()
+    out = subprocess.run(
+      [
+        "nvidia-smi",
+        "--query-compute-apps=pid,used_memory",
+        "--format=csv,noheader,nounits",
+      ],
+      capture_output=True,
+      text=True,
+      timeout=5,
+    )
+    if out.returncode != 0 or not out.stdout.strip():
+      return None
+    total = 0.0
+    for line in out.stdout.strip().split("\n"):
+      parts = line.strip().split(", ")
+      if len(parts) >= 2 and parts[0].strip() == str(pid):
+        total += float(parts[1].strip())
+    return round(total, 2) if total > 0 else None
+  except Exception:
+    return None
+
+
 def run_throughput(
   task_id: str = "myoElbowPose1D6MRandom-v0",
   num_envs: int = 256,
@@ -89,6 +118,15 @@ def run_throughput(
   env = make_myosuite_env(task_id, cfg=cfg, num_envs=num_envs, device=device)
   mem_after_create = _gpu_memory_mb() if device != "cpu" else None
 
+  # Detect data path: Warp bridge (mujoco_warp) vs pinned shuttle
+  unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
+  using_warp_bridge = (
+    device != "cpu" and getattr(unwrapped, "_warp_bridge", None) is not None
+  )
+  data_path = (
+    "mujoco_warp" if using_warp_bridge else ("pinned" if device != "cpu" else "cpu")
+  )
+
   try:
     import numpy as np
 
@@ -116,6 +154,9 @@ def run_throughput(
 
   mem_after = _gpu_memory_mb() if device != "cpu" else None
   peak_mb = None
+  gpu_used_mb = (
+    None  # total GPU used (nvidia-smi), includes Warp when data_path=mujoco_warp
+  )
   if device != "cpu":
     try:
       import torch
@@ -124,6 +165,7 @@ def run_throughput(
         peak_mb = round(torch.cuda.max_memory_allocated() / (1024**2), 2)
     except Exception:
       pass
+    gpu_used_mb = _gpu_used_mb_nvidia_smi()
 
   total = num_steps * n
   out = {
@@ -132,6 +174,7 @@ def run_throughput(
     "num_envs": n,
     "device": device,
     "physics_backend": physics_backend or "cpu",
+    "data_path": data_path,
     "steps_per_sec": round(total / elapsed, 1),
     "total_steps": total,
     "elapsed_s": round(elapsed, 3),
@@ -146,6 +189,8 @@ def run_throughput(
     out["gpu_mem_reserved_after_mb"] = mem_after[1]
   if peak_mb is not None:
     out["gpu_mem_peak_mb"] = peak_mb
+  if gpu_used_mb is not None:
+    out["gpu_used_mb"] = gpu_used_mb
   return out
 
 
@@ -269,15 +314,32 @@ def main() -> int:
       )
       results["throughput"].append(r)
       msg = f"{r['steps_per_sec']:.0f} steps/s"
-      if r.get("gpu_mem_peak_mb") is not None:
-        msg += f"  (GPU peak: {r['gpu_mem_peak_mb']} MB)"
+      if r.get("data_path"):
+        msg += f"  [{r['data_path']}]"
+      # With mujoco_warp, observation buffers are in Warp's allocator so PyTorch peak is low
+      if r.get("gpu_used_mb") is not None:
+        msg += f"  (GPU used: {r['gpu_used_mb']} MB)"
+      elif r.get("gpu_mem_peak_mb") is not None:
+        msg += f"  (PyTorch peak: {r['gpu_mem_peak_mb']} MB)"
       print(msg)
     if args.device != "cpu" and results["throughput"]:
-      peak = (results["throughput"][0].get("gpu_mem_peak_mb") or 0) or 0.01
-      print(
-        f"  Note: With standard MyoSuite (CPU physics), only obs/reward tensors are on GPU (peak ~{peak:.2f} MB). "
-        "nvidia-smi may show little change. For large GPU use, install MyoSuite mjx branch and use --with-warp."
-      )
+      r0 = results["throughput"][0]
+      peak = (r0.get("gpu_mem_peak_mb") or 0) or 0.01
+      dp = r0.get("data_path", "")
+      if dp == "mujoco_warp":
+        print(
+          "  Data path: mujoco_warp (Warp bridge). "
+          "Observation buffers are in Warp's allocator; 'GPU used' is total (nvidia-smi)."
+        )
+      else:
+        print(
+          f"  Data path: {dp or 'pinned'}. For mujoco_warp bridge, install warp-lang: "
+          "uv add warp-lang (or pip install warp-lang)."
+        )
+        print(
+          f"  Note: CPU physics; only obs/reward on GPU (peak ~{peak:.2f} MB). "
+          "For GPU sim use MyoSuite mjx branch and --with-warp."
+        )
     print()
 
   # ---- Compare mjlab vs mjlab_myosuite on GPU ----
@@ -294,7 +356,7 @@ def main() -> int:
       myosuite_sps_list: list[float] = []
       for num_envs in args.num_envs:
         print(f"  num_envs={num_envs}:", end="", flush=True)
-        # mjlab_myosuite on GPU
+        # mjlab_myosuite on GPU (uses mujoco_warp bridge when warp is installed)
         r_wrap = run_throughput(
           task_id=args.task,
           num_envs=num_envs,
@@ -304,13 +366,20 @@ def main() -> int:
         )
         results["mjlab_comparison"].append(r_wrap)
         myosuite_sps_list.append(r_wrap["steps_per_sec"])
+        dp = f" [{r_wrap.get('data_path', '')}]" if r_wrap.get("data_path") else ""
         gpu_mem = (
-          f" (GPU peak: {r_wrap['gpu_mem_peak_mb']} MB)"
-          if r_wrap.get("gpu_mem_peak_mb") is not None
-          else ""
+          f" (GPU used: {r_wrap['gpu_used_mb']} MB)"
+          if r_wrap.get("gpu_used_mb") is not None
+          else (
+            f" (PyTorch peak: {r_wrap['gpu_mem_peak_mb']} MB)"
+            if r_wrap.get("gpu_mem_peak_mb") is not None
+            else ""
+          )
         )
         print(
-          f" mjlab_myosuite={r_wrap['steps_per_sec']:.0f}{gpu_mem}", end="", flush=True
+          f" mjlab_myosuite={r_wrap['steps_per_sec']:.0f}{dp}{gpu_mem}",
+          end="",
+          flush=True,
         )
         # Native mjlab on GPU
         if native_task:

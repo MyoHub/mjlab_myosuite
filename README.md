@@ -96,8 +96,10 @@ The integration follows mjlab's native task registration pattern from the [creat
 
 ## Supported MyoSuite Versions
 
-- **Standard MyoSuite**: CPU-based MuJoCo simulation
-- **MJX/Warp MyoSuite**: GPU-accelerated from the [mjx branch](https://github.com/MyoHub/myosuite/tree/mjx/myosuite)
+- **Standard MyoSuite**: CPU-based MuJoCo simulation (default).
+- **MJX/Warp MyoSuite**: GPU-accelerated from the [MyoSuite mjx branch](https://github.com/MyoHub/myosuite/tree/mjx). Install with: `git clone https://github.com/MyoHub/myosuite.git && cd myosuite && git checkout mjx && pip install -e .`
+
+Set `cfg.physics_backend = PhysicsBackend.WARP` (or use auto-detection) when using the mjx branch so the data path can align with mjlab's Warp bridge when available.
 
 The wrapper automatically detects and supports both versions.
 
@@ -106,11 +108,12 @@ The wrapper automatically detects and supports both versions.
 ### Environment Configuration
 
 ```python
-from mjlab_myosuite.config import MyoSuiteEnvCfg
+from mjlab_myosuite.config import MyoSuiteEnvCfg, PhysicsBackend
 
 cfg = MyoSuiteEnvCfg()
 cfg.num_envs = 4096  # For training
 cfg.device = "cuda:0"  # Use GPU for mjx/warp versions
+cfg.physics_backend = PhysicsBackend.WARP  # Optional: use when MyoSuite is from mjx branch
 ```
 
 ### RL Configuration
@@ -225,11 +228,27 @@ pytest tests/test_myosuite_integration.py::test_wrapper_creation_direct
 # Run GPU acceleration tests (requires CUDA)
 pytest tests/test_gpu_acceleration.py -v
 
+# Verify mjlab_myosuite operates like mjlab (reset/step/get_observations, device, scaling)
+pytest tests/test_mjlab_env_contract.py tests/test_gpu_scaling.py -v
+
 # Run ONNX export tests (requires ONNX)
 pytest tests/test_onnx_export.py -v
 ```
 
 ## Development
+
+**Benchmarks** (verify GPU use and scaling with num_envs):
+
+```bash
+# Throughput at different num_envs (CPU or GPU)
+uv run python benchmarks/run_benchmarks.py --device cuda:0 --num-envs 64 256 1024
+
+# Compare mjlab_myosuite vs native mjlab on GPU (both should scale similarly)
+uv run python benchmarks/run_benchmarks.py --compare-mjlab --num-envs 64 256 1024
+
+# Assert that throughput scales with num_envs
+uv run python benchmarks/run_benchmarks.py --verify-scaling --num-envs 64 256
+```
 
 Run tests:
 

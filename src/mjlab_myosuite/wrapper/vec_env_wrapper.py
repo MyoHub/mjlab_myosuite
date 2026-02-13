@@ -21,6 +21,7 @@ from .mocks import (
   _MockScene,
 )
 from .sim_compat import create_mock_sim
+from .warp_bridge import WarpObservationBridge, is_warp_available
 
 # Set MUJOCO_GL=egl early for headless rendering support
 # This must be done BEFORE any MuJoCo imports
@@ -51,6 +52,7 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     device: str | torch.device = "cpu",
     clip_actions: float | None = None,
     render_mode: str | None = None,
+    physics_backend: Any = None,
   ):
     """Initialize the wrapper.
 
@@ -60,6 +62,7 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       device: Device to use for tensors
       clip_actions: Optional action clipping value
       render_mode: Render mode for the environment (e.g., "rgb_array" for video recording)
+      physics_backend: PhysicsBackend.CPU or WARP (from config); used for data path alignment with mjlab.
     """
     # Initialize gym.Env parent (no-op but required for proper inheritance)
     gym.Env.__init__(self)
@@ -99,6 +102,17 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     norm_device = _normalize_device(device)
     self.device_str = str(norm_device)
     self.device = norm_device
+
+    # Physics backend (CPU vs WARP) for mjlab-aligned data path; default CPU
+    if physics_backend is None:
+      try:
+        from mjlab_myosuite.config import PhysicsBackend
+
+        self.physics_backend = PhysicsBackend.CPU
+      except ImportError:
+        self.physics_backend = None
+    else:
+      self.physics_backend = physics_backend
 
     # Vectorize if needed
     if isinstance(env, vector.VectorEnv):
@@ -214,9 +228,17 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
     # Track last observation for get_observations()
     self._last_obs_dict: dict[str, Any] = {}
 
-    # Pinned buffer for fast CPU->GPU transfer (lazy-allocated when shape is known)
+    # Pinned buffer for fast CPU->GPU transfer (fallback when Warp not available)
     self._pinned_policy_buffer: torch.Tensor | None = None
     self._pinned_policy_shape: tuple[int, ...] | None = None
+
+    # Warp bridge: CPU obs → Warp GPU → PyTorch (zero-copy), same as mjlab
+    self._warp_bridge: WarpObservationBridge | None = None
+    if norm_device.type == "cuda" and is_warp_available():
+      try:
+        self._warp_bridge = WarpObservationBridge(norm_device)
+      except Exception:
+        self._warp_bridge = None
 
     # Create mock sim object for viewer compatibility
     # MyoSuite environments have mj_model and mj_data directly on the unwrapped env
@@ -710,11 +732,13 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       extras,
     )
 
-  def _numpy_to_device(self, arr: np.ndarray) -> torch.Tensor:
-    """Copy numpy array to device; use pinned buffer for GPU for faster transfer."""
+  def _numpy_to_device(self, arr: np.ndarray, key: str = "policy") -> torch.Tensor:
+    """Copy numpy array to device. On CUDA uses Warp bridge (zero-copy) when available, else pinned transfer."""
     arr = np.asarray(arr, dtype=np.float32)
     if self.device.type != "cuda":
       return torch.from_numpy(arr).to(device=self.device, dtype=torch.float32)
+    if self._warp_bridge is not None:
+      return self._warp_bridge.numpy_to_torch(key, arr)
     shape = arr.shape
     if self._pinned_policy_buffer is None or self._pinned_policy_buffer.shape != shape:
       self._pinned_policy_buffer = torch.empty(
@@ -742,7 +766,7 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
           if isinstance(value, torch.Tensor):
             obs_dict[key] = value.to(device=self.device, dtype=torch.float32)
           elif isinstance(value, np.ndarray):
-            obs_dict[key] = self._numpy_to_device(value)
+            obs_dict[key] = self._numpy_to_device(value, key=key)
           else:
             obs_dict[key] = torch.tensor(value, device=self.device, dtype=torch.float32)
           continue
@@ -758,7 +782,8 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
         policy_obs = self._numpy_to_device(
           np.concatenate(policy_arrays, axis=-1)
           if len(policy_arrays) > 1
-          else policy_arrays[0]
+          else policy_arrays[0],
+          key="policy",
         )
         obs_dict["policy"] = policy_obs
         if "critic" not in obs_dict:
@@ -774,8 +799,8 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
           obs_dict["critic"] = policy_obs
       return obs_dict
     if isinstance(obs, np.ndarray):
-      # Single observation array - use pinned buffer on GPU for faster transfer
-      policy_obs = self._numpy_to_device(obs)
+      # Single observation array - Warp bridge or pinned buffer on GPU
+      policy_obs = self._numpy_to_device(obs, key="policy")
       return {"policy": policy_obs, "critic": policy_obs}
     if isinstance(obs, (list, tuple)):
       # Handle list/tuple of observations
@@ -803,7 +828,7 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
       return {"policy": policy_obs, "critic": policy_obs}
     # Fallback
     if isinstance(obs, np.ndarray):
-      policy_obs = self._numpy_to_device(obs)
+      policy_obs = self._numpy_to_device(obs, key="policy")
     else:
       policy_obs = torch.tensor(obs, device=self.device, dtype=torch.float32)
     return {"policy": policy_obs, "critic": policy_obs}
@@ -828,6 +853,8 @@ class MyoSuiteVecEnvWrapper(VecEnv, gym.Env):
 
   def close(self) -> None:
     """Close the environment."""
+    if self._warp_bridge is not None:
+      self._warp_bridge.clear_buffers()
     return self.env.close()
 
   def _modify_action_space(self) -> None:
