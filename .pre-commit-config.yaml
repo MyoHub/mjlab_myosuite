@@ -9,15 +9,19 @@ repos:
         types: [python]
         pass_filenames: false # can be true if repo is large
 
-  # 2. Python linting & formatting with Ruff
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.10
+  # 2. Ruff: use local (uv run) so format matches "uv run ruff format".
+  - repo: local
     hooks:
-      # Lint (match CI expectations)
       - id: ruff-check
-        args: [--fix]
-      # Format (match CI expectations)
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
       - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
 
   # 3. Prettier for JS/TS/other assets
   - repo: https://github.com/pre-commit/mirrors-prettier
