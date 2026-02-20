@@ -16,22 +16,15 @@ pytestmark = pytest.mark.skipif(not _has_myosuite(), reason="myosuite not instal
 
 
 def test_registration_and_make_env():
-  import gymnasium as gym
-
-  # Trigger auto-registration
   import mjlab_myosuite  # noqa: F401
+  from mjlab_myosuite.env_factory import make_myosuite_env
+  from mjlab_myosuite.registration import get_myosuite_env_ids
 
-  # Pick one canonical env id that should exist in MyoSuite
   raw_id = "myoElbowPose1D6MRandom-v0"
-  wrapped_id = f"Mjlab-MyoSuite-{raw_id}"
+  all_envs = get_myosuite_env_ids()
+  assert raw_id in all_envs
 
-  # Verify registration
-  all_envs = list(gym.registry.keys())
-  assert raw_id in all_envs or wrapped_id in all_envs
-
-  # Make mjlab-wrapped env (prefer the wrapped id if present)
-  env_id = wrapped_id if wrapped_id in all_envs else raw_id
-  env = gym.make(env_id)
+  env = make_myosuite_env(raw_id)
 
   try:
     # Basic reset/step
@@ -79,13 +72,11 @@ def test_registration_and_make_env():
 
 
 def test_wrapper_observations_device():
-  import gymnasium as gym
   import torch
 
-  # Trigger auto-registration
-  import mjlab_myosuite  # noqa: F401
+  from mjlab_myosuite.env_factory import make_myosuite_env
 
-  env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0")
+  env = make_myosuite_env("myoElbowPose1D6MRandom-v0")
   try:
     # If wrapper exposes get_observations, ensure tensors are on the env device
     unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
@@ -100,12 +91,9 @@ def test_wrapper_observations_device():
 
 
 def test_viewer_forward_kinematics_available():
-  import gymnasium as gym
+  from mjlab_myosuite.env_factory import make_myosuite_env
 
-  # Trigger auto-registration
-  import mjlab_myosuite  # noqa: F401
-
-  env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0")
+  env = make_myosuite_env("myoElbowPose1D6MRandom-v0")
   try:
     unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
     sim = getattr(unwrapped, "sim", None)
@@ -279,23 +267,19 @@ def test_wrapper_creation_via_factory():
 
 def test_wrapper_multiple_myosuite_envs():
   """Test wrapper creation for different MyoSuite environments."""
-  import gymnasium as gym
   import torch
 
-  # Trigger auto-registration
-  import mjlab_myosuite  # noqa: F401
+  from mjlab_myosuite.env_factory import make_myosuite_env
+  from mjlab_myosuite.registration import get_myosuite_env_ids
 
-  # Test a few different MyoSuite environments
-  test_envs = [
-    "Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0",
-    "Mjlab-MyoSuite-myoElbowPose1D6M-v0",
-  ]
+  available = get_myosuite_env_ids()
+  test_envs = ["myoElbowPose1D6MRandom-v0", "myoElbowPose1D6M-v0"]
 
   for env_id in test_envs:
-    if env_id not in gym.registry:
-      continue  # Skip if not registered
+    if env_id not in available:
+      continue
 
-    env = gym.make(env_id)
+    env = make_myosuite_env(env_id)
     try:
       # Basic functionality test
       obs, info = env.reset()

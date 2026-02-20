@@ -8,15 +8,42 @@ from typing import TYPE_CHECKING
 if "MUJOCO_GL" not in os.environ:
   os.environ["MUJOCO_GL"] = "egl"
 
-from .config import MyoSuiteEnvCfg
+from .config import MyoSuiteEnvCfg, PhysicsBackend
 from .wrapper import MyoSuiteVecEnvWrapper
 
 if TYPE_CHECKING:
   pass
 
 
-def _import_myosuite_gym():
-  """Import MyoSuite gym module, trying mjx/warp versions first, then standard version.
+def detect_physics_backend() -> PhysicsBackend:
+  """Detect whether MyoSuite provides a WARP/mjx backend (e.g. from mjx branch).
+
+  Returns:
+    PhysicsBackend.WARP if warp/mjx is available, else PhysicsBackend.CPU.
+  See: https://github.com/MyoHub/myosuite/tree/mjx
+  """
+  try:
+    import myosuite  # noqa: F401
+  except ImportError:
+    return PhysicsBackend.CPU
+  # mjx branch may expose warp or mjx-specific attributes
+  if getattr(myosuite, "HAS_WARP", False) or getattr(myosuite, "HAS_MJX", False):
+    return PhysicsBackend.WARP
+  try:
+    import warp as wp  # noqa: F401
+
+    # If we have warp and myosuite, mjx branch might be in use; be conservative
+    return PhysicsBackend.CPU
+  except ImportError:
+    pass
+  return PhysicsBackend.CPU
+
+
+def _import_myosuite_gym(prefer_warp: bool = False):
+  """Import MyoSuite gym module, trying mjx/warp versions first when prefer_warp, then standard.
+
+  Args:
+    prefer_warp: If True, prefer MyoSuite from mjx branch (warp-backed) when available.
 
   Returns:
     The myosuite gym module
@@ -24,19 +51,15 @@ def _import_myosuite_gym():
   Raises:
     ImportError: If no MyoSuite version is available
   """
-  # Try mjx/warp compatible version first (from mjx branch)
+  # Try mjx/warp compatible version first (from mjx branch: https://github.com/MyoHub/myosuite/tree/mjx)
   try:
     from myosuite.utils import gym as myosuite_gym
 
-    # Check if this is the mjx/warp version by looking for specific attributes
-    # The mjx version might have different module structure
     return myosuite_gym
   except ImportError:
     pass
 
-  # Try alternative import paths for mjx/warp versions
   try:
-    # Some versions might have different import paths
     import myosuite
 
     if hasattr(myosuite, "utils") and hasattr(myosuite.utils, "gym"):
@@ -44,7 +67,6 @@ def _import_myosuite_gym():
   except (ImportError, AttributeError):
     pass
 
-  # Final fallback - try direct import
   try:
     from myosuite import utils
 
@@ -56,6 +78,7 @@ def _import_myosuite_gym():
   raise ImportError(
     "MyoSuite is not installed. Install it with: pip install -U myosuite\n"
     "For mjx/warp compatible versions, use the mjx branch:\n"
+    "  https://github.com/MyoHub/myosuite/tree/mjx\n"
     "  git clone https://github.com/MyoHub/myosuite.git\n"
     "  cd myosuite && git checkout mjx && pip install -e ."
   )
@@ -129,14 +152,27 @@ def make_myosuite_env(
   if cfg is None:
     cfg = MyoSuiteEnvCfg()
 
-  # num_envs from argument takes precedence over cfg
+  # num_envs and device from arguments take precedence over cfg
   if num_envs is None:
     num_envs = cfg.num_envs if hasattr(cfg, "num_envs") else 1
-  device = cfg.device if hasattr(cfg, "device") and cfg.device else device
+  # Use device from cfg when caller did not pass device (default "cpu")
+  if device == "cpu" and cfg is not None:
+    cfg_device = getattr(cfg, "device", "cpu")
+    if cfg_device is not None and str(cfg_device).lower().startswith("cuda"):
+      device = str(cfg_device)
+  # Sync device to cfg for consistency
+  object.__setattr__(cfg, "device", device)
+
+  # Physics backend: kwargs override, then config, then auto-detect
+  physics_backend = kwargs.pop("physics_backend", None)
+  if physics_backend is None:
+    physics_backend = getattr(cfg, "physics_backend", None)
+  if physics_backend is None:
+    physics_backend = detect_physics_backend()
 
   # Try to create the environment with compatibility workarounds
   try:
-    # Create the base MyoSuite environment
+    # Create the base MyoSuite environment (same gym.make for CPU and mjx; mjx branch uses warp under the hood)
     myosuite_env = myosuite_gym.make(myosuite_env_id, **kwargs)
   except AttributeError as e:
     print(e)
@@ -146,12 +182,13 @@ def make_myosuite_env(
       "See docs/myosuite_troubleshooting.md for solutions."
     ) from e
 
-  # Wrap it for mjlab compatibility
+  # Wrap it for mjlab compatibility (backend used for data path: shuttle vs bridge when supported)
   wrapped_env = MyoSuiteVecEnvWrapper(
     env=myosuite_env,
     num_envs=num_envs,
     device=device,
-    render_mode=render_mode,  # Pass render_mode to wrapper
+    render_mode=render_mode,
+    physics_backend=physics_backend,
   )
 
   # Get the spec from the original MyoSuite environment and set it on the wrapper
@@ -160,3 +197,56 @@ def make_myosuite_env(
     wrapped_env.spec = myosuite_env.spec
 
   return wrapped_env
+
+
+def task_id_to_myosuite_id(task_id: str) -> tuple[str, bool]:
+  """Parse mjlab MyoSuite task_id into base env id and tracking flag.
+
+  Args:
+    task_id: e.g. "Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0" or
+      "Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0"
+
+  Returns:
+    (myosuite_env_id, is_tracking), e.g. ("myoElbowPose1D6MRandom-v0", False).
+  """
+  if not task_id.startswith("Mjlab-MyoSuite"):
+    return task_id, False
+  rest = task_id[len("Mjlab-MyoSuite-") :]
+  if rest.startswith("Tracking-"):
+    return rest[len("Tracking-") :], True
+  return rest, False
+
+
+def make_myosuite_env_from_task_id(
+  task_id: str,
+  cfg=None,
+  device: str = "cpu",
+  render_mode: str | None = None,
+  num_envs: int | None = None,
+  **kwargs,
+) -> MyoSuiteVecEnvWrapper:
+  """Create a wrapped MyoSuite env from mjlab task_id (e.g. Mjlab-MyoSuite-...).
+
+  Use this when you have a task_id from the CLI or mjlab registry; for direct
+  creation prefer make_myosuite_env(myosuite_env_id, ...).
+  """
+  myosuite_env_id, is_tracking = task_id_to_myosuite_id(task_id)
+  if is_tracking:
+    from .tasks.tracking.env_factory import make_myosuite_tracking_env
+
+    return make_myosuite_tracking_env(
+      myosuite_env_id=myosuite_env_id,
+      cfg=cfg,
+      device=device,
+      render_mode=render_mode,
+      num_envs=num_envs,
+      **kwargs,
+    )
+  return make_myosuite_env(
+    myosuite_env_id=myosuite_env_id,
+    cfg=cfg,
+    device=device,
+    render_mode=render_mode,
+    num_envs=num_envs,
+    **kwargs,
+  )

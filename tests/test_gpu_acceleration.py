@@ -24,20 +24,27 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _make_gpu_env(*args, **kwargs):
+  """Create MyoSuite env via factory; skip on MyoSuite/MuJoCo version mismatch (e.g. mjDSBL_SPRING)."""
+  from mjlab_myosuite.env_factory import make_myosuite_env
+
+  try:
+    return make_myosuite_env(*args, **kwargs)
+  except AttributeError as e:
+    if "mjDSBL_SPRING" in str(e) or "mjtDisableBit" in str(e):
+      pytest.skip(f"MyoSuite + MuJoCo version mismatch: {e}")
+    raise
+
+
 def test_gpu_acceleration_observations():
   """Test that observations are on GPU when device is set to cuda:0."""
-  import gymnasium as gym
-
-  # Trigger auto-registration
-  import mjlab_myosuite  # noqa: F401
   from mjlab_myosuite.config import MyoSuiteEnvCfg
 
-  # Create environment with GPU device
   cfg = MyoSuiteEnvCfg()
   cfg.device = "cuda:0"
-  cfg.num_envs = 4  # Use multiple envs to test batching
+  cfg.num_envs = 4
 
-  env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0", cfg=cfg)
+  env = _make_gpu_env("myoElbowPose1D6MRandom-v0", cfg=cfg)
 
   try:
     # Verify wrapper device is set correctly
@@ -106,20 +113,54 @@ def test_gpu_acceleration_observations():
     env.close()
 
 
+def test_myosuite_env_moved_to_gpu():
+  """MyoSuite env created with device=cuda:0 has observations and step outputs on GPU."""
+  env = _make_gpu_env(
+    "myoElbowPose1D6MRandom-v0",
+    num_envs=2,
+    device="cuda:0",
+  )
+  try:
+    assert str(env.device).startswith("cuda"), (
+      "env.device must be cuda when device=cuda:0"
+    )
+
+    env.reset(seed=42)
+    obs = env.get_observations()
+    assert "policy" in obs and "critic" in obs
+    for key in ("policy", "critic"):
+      t = obs[key]
+      assert isinstance(t, torch.Tensor), f"obs[{key}] should be Tensor, got {type(t)}"
+      assert t.device.type == "cuda", f"obs[{key}] should be on GPU, got {t.device}"
+
+    action = env.action_space.sample()
+    step_obs, rewards, dones, extras = env.step(action)
+    for key in ("policy", "critic"):
+      if key in step_obs:
+        t = step_obs[key]
+        assert isinstance(t, torch.Tensor), f"step obs[{key}] should be Tensor"
+        assert t.device.type == "cuda", (
+          f"step obs[{key}] should be on GPU, got {t.device}"
+        )
+    if isinstance(rewards, torch.Tensor):
+      assert rewards.device.type == "cuda", (
+        f"rewards should be on GPU, got {rewards.device}"
+      )
+    if isinstance(dones, torch.Tensor):
+      assert dones.device.type == "cuda", f"dones should be on GPU, got {dones.device}"
+  finally:
+    env.close()
+
+
 def test_gpu_acceleration_simulation_data():
   """Test that simulation data structures are accessible and potentially on GPU for mjx/warp versions."""
-  import gymnasium as gym
-
-  # Trigger auto-registration
-  import mjlab_myosuite  # noqa: F401
   from mjlab_myosuite.config import MyoSuiteEnvCfg
 
-  # Create environment with GPU device
   cfg = MyoSuiteEnvCfg()
   cfg.device = "cuda:0"
   cfg.num_envs = 2
 
-  env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0", cfg=cfg)
+  env = _make_gpu_env("myoElbowPose1D6MRandom-v0", cfg=cfg)
 
   try:
     unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
@@ -150,18 +191,13 @@ def test_gpu_acceleration_simulation_data():
 
 def test_gpu_acceleration_batched_environments():
   """Test that batched environments work correctly with GPU acceleration."""
-  import gymnasium as gym
-
-  # Trigger auto-registration
-  import mjlab_myosuite  # noqa: F401
   from mjlab_myosuite.config import MyoSuiteEnvCfg
 
-  # Create environment with multiple parallel environments on GPU
   cfg = MyoSuiteEnvCfg()
   cfg.device = "cuda:0"
-  cfg.num_envs = 8  # Use more envs to test batching
+  cfg.num_envs = 8
 
-  env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0", cfg=cfg)
+  env = _make_gpu_env("myoElbowPose1D6MRandom-v0", cfg=cfg)
 
   try:
     unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
@@ -224,7 +260,6 @@ def test_gpu_acceleration_batched_environments():
 def test_gpu_acceleration_via_factory():
   """Test GPU acceleration when creating environment via factory function."""
   from mjlab_myosuite.config import MyoSuiteEnvCfg
-  from mjlab_myosuite.env_factory import make_myosuite_env
 
   # Create config with GPU device
   cfg = MyoSuiteEnvCfg()
@@ -232,7 +267,7 @@ def test_gpu_acceleration_via_factory():
   cfg.num_envs = 4
 
   # Create environment with GPU device via factory
-  wrapped = make_myosuite_env("myoElbowPose1D6MRandom-v0", cfg=cfg, num_envs=4)
+  wrapped = _make_gpu_env("myoElbowPose1D6MRandom-v0", cfg=cfg, num_envs=4)
 
   try:
     # Verify device is set correctly

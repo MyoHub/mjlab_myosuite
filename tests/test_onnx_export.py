@@ -70,9 +70,11 @@ def test_export_myosuite_policy_as_onnx():
       return self.actor(obs)
 
   # Create environment to get dimensions
+  from mjlab_myosuite.env_factory import make_myosuite_env
+
   cfg = MyoSuiteEnvCfg()
   cfg.num_envs = 1
-  env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0", cfg=cfg)
+  env = make_myosuite_env("myoElbowPose1D6MRandom-v0", cfg=cfg)
 
   try:
     # Unwrap to get the actual wrapper
@@ -122,16 +124,13 @@ def test_export_myosuite_policy_as_onnx():
 
 def test_attach_myosuite_onnx_metadata():
   """Test attaching metadata to ONNX model."""
-  import gymnasium as gym
 
-  # Trigger auto-registration
-  import mjlab_myosuite  # noqa: F401
   from mjlab_myosuite.config import MyoSuiteEnvCfg
+  from mjlab_myosuite.env_factory import make_myosuite_env
 
-  # Create environment
   cfg = MyoSuiteEnvCfg()
   cfg.num_envs = 2
-  env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0", cfg=cfg)
+  env = make_myosuite_env("myoElbowPose1D6MRandom-v0", cfg=cfg)
 
   try:
     unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env
@@ -203,15 +202,12 @@ def test_attach_myosuite_onnx_metadata():
 
 def test_manager_compatibility_attributes():
   """Test that wrapper has ManagerBasedRlEnv-compatible attributes."""
-  import gymnasium as gym
-
-  # Trigger auto-registration
-  import mjlab_myosuite  # noqa: F401
   from mjlab_myosuite.config import MyoSuiteEnvCfg
+  from mjlab_myosuite.env_factory import make_myosuite_env
 
   cfg = MyoSuiteEnvCfg()
   cfg.num_envs = 4
-  env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0", cfg=cfg)
+  env = make_myosuite_env("myoElbowPose1D6MRandom-v0", cfg=cfg)
 
   try:
     unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env

@@ -1,43 +1,15 @@
-"""Wrapper script for mjlab native play script with MyoSuite environment registration.
+"""Wrapper script for mjlab native play script with MyoSuite support.
 
-This script ensures MyoSuite environments are registered before mjlab's native
-play script runs, allowing MyoSuite tasks to be used with mjlab's native CLI.
-
-For MyoSuite tasks, this script patches mjlab's run_play to use gym.make()
-instead of ManagerBasedRlEnv, inheriting all other logic from mjlab.
+Registers MyoSuite tasks with mjlab and patches run_play so MyoSuite tasks
+create envs via make_myosuite_env_from_task_id() instead of ManagerBasedRlEnv.
 """
 
 # ruff: noqa: E402, I001
 
-import time
+# Import mjlab_myosuite first to trigger mjlab task registration (no gym registration)
+import mjlab_myosuite  # noqa: F401
 
-# Import mjlab_myosuite FIRST to trigger auto-registration of MyoSuite environments
-# This MUST happen before any mjlab imports to ensure registration completes
-# before tyro evaluates choices
-try:
-  # Force registration to complete by accessing the registry
-  import gymnasium as gym
-
-  import mjlab_myosuite  # noqa: F401
-
-  # Trigger registration multiple times to ensure it completes
-  for _ in range(3):
-    _ = list(gym.registry.keys())  # Trigger any lazy registration
-    time.sleep(0.1)
-
-  # Verify MyoSuite environments are registered
-  myosuite_tasks = [k for k in gym.registry.keys() if "Mjlab-MyoSuite" in k]
-  if myosuite_tasks:
-    print(f"[INFO] Registered {len(myosuite_tasks)} MyoSuite environments")
-except ImportError:
-  pass  # MyoSuite not available, skip registration
-except Exception as e:
-  # Log but don't fail - registration might have partially completed
-  import warnings
-
-  warnings.warn(f"MyoSuite registration warning: {e}", UserWarning, stacklevel=2)
-
-# Now import mjlab's play module and patch run_play for MyoSuite tasks
+# Import mjlab's play module and patch run_play for MyoSuite tasks
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.registry import load_env_cfg as mjlab_load_env_cfg
 
@@ -183,9 +155,9 @@ def _patched_load_env_cfg(task_name: str, play: bool = False):
 def _patched_manager_init(self, cfg, device, render_mode=None):
   """Patched ManagerBasedRlEnv.__init__ that wraps MyoSuite environments.
 
-  For MyoSuite configs, this creates a MyoSuite environment via gym.make() and
-  configures ManagerBasedRlEnv to wrap it. The MyoSuite environment is stored in
-  self.myosuite_env for use by observation/action terms.
+  For MyoSuite configs, this creates a MyoSuite environment via
+  make_myosuite_env_from_task_id() and configures ManagerBasedRlEnv to wrap it.
+  The MyoSuite environment is stored in self.myosuite_env for observation/action terms.
   """
   # Check if this is a MyoSuite config
   try:
@@ -238,12 +210,10 @@ def _patched_manager_init(self, cfg, device, render_mode=None):
           num_envs = getattr(cfg, "num_envs", 1)
           object.__setattr__(cfg, "scene", _MockSceneCfg(num_envs))
 
-      # Create MyoSuite environment first (needed for observation/action terms)
-      # We need to create it before setting up observations/actions so we can
-      # reference it in the observation/action term configs
-      import gymnasium as gym
+      # Create MyoSuite environment via factory (no gym registration)
+      from mjlab_myosuite.env_factory import make_myosuite_env_from_task_id
 
-      myosuite_env = gym.make(
+      myosuite_env = make_myosuite_env_from_task_id(
         task_id,
         cfg=cfg,
         device=device,
@@ -578,14 +548,8 @@ if hasattr(mjlab_play_module, "load_env_cfg"):
 
 
 def _patched_run_play(task_id: str, cfg) -> None:
-  """Patched run_play that uses gym.make() for MyoSuite tasks.
-
-  This function inherits all logic from mjlab's original run_play, but
-  uses gym.make() directly for MyoSuite tasks instead of ManagerBasedRlEnv.
-  """
-  # Check if this is a MyoSuite task
+  """Patched run_play that uses make_myosuite_env_from_task_id for MyoSuite tasks."""
   if task_id.startswith("Mjlab-MyoSuite"):
-    # Import MyoSuite-specific components and mjlab utilities
     try:
       from pathlib import Path
 
@@ -595,15 +559,14 @@ def _patched_run_play(task_id: str, cfg) -> None:
       from mjlab.utils.torch import configure_torch_backends
 
       from mjlab_myosuite.config import MyoSuiteEnvCfg
+      from mjlab_myosuite.env_factory import make_myosuite_env_from_task_id
       from mjlab_myosuite.tasks.tracking.tracking_env_cfg import (
         MyoSuiteTrackingEnvCfg,
       )
       from mjlab_myosuite.wrapper import MyoSuiteVecEnvWrapper
     except ImportError:
-      # MyoSuite not available, fall back to original
       return _original_run_play(task_id, cfg)
 
-    # Use the same logic as mjlab's run_play but use gym.make() for MyoSuite
     configure_torch_backends()
     device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
     env_cfg = load_env_cfg(task_id, play=True)
@@ -612,20 +575,17 @@ def _patched_run_play(task_id: str, cfg) -> None:
     DUMMY_MODE = cfg.agent in {"zero", "random"}
     TRAINED_MODE = not DUMMY_MODE
 
-    # Handle MyoSuite configs
     if isinstance(env_cfg, (MyoSuiteEnvCfg, MyoSuiteTrackingEnvCfg)):
       env_cfg.device = device
       if cfg.num_envs is not None:
         env_cfg.num_envs = cfg.num_envs
 
-    # Handle tracking tasks and motion_file
     is_tracking = isinstance(env_cfg, MyoSuiteTrackingEnvCfg)
     if is_tracking:
       if cfg.motion_file is not None:
         if env_cfg.commands is not None and hasattr(env_cfg.commands, "motion"):
           env_cfg.commands.motion.motion_file = cfg.motion_file
       elif cfg.registry_name:
-        # Handle wandb registry
         registry_name = cfg.registry_name
         if ":" not in registry_name:
           registry_name = registry_name + ":latest"
@@ -638,7 +598,6 @@ def _patched_run_play(task_id: str, cfg) -> None:
             Path(artifact.download()) / "motion.npz"
           )
 
-    # Handle video settings
     if cfg.video_height is not None:
       if hasattr(env_cfg, "viewer") and hasattr(env_cfg.viewer, "height"):
         env_cfg.viewer.height = cfg.video_height
@@ -646,9 +605,10 @@ def _patched_run_play(task_id: str, cfg) -> None:
       if hasattr(env_cfg, "viewer") and hasattr(env_cfg.viewer, "width"):
         env_cfg.viewer.width = cfg.video_width
 
-    # Create environment using gym.make() instead of ManagerBasedRlEnv
     render_mode = "rgb_array" if (TRAINED_MODE and cfg.video) else None
-    env = gym.make(task_id, cfg=env_cfg, device=device, render_mode=render_mode)
+    env = make_myosuite_env_from_task_id(
+      task_id, cfg=env_cfg, device=device, render_mode=render_mode
+    )
 
     # Handle video recording (same as mjlab)
     if TRAINED_MODE and cfg.video:
@@ -674,9 +634,8 @@ def _patched_run_play(task_id: str, cfg) -> None:
         disable_logger=True,
       )
 
-    # For MyoSuite tasks, implement the full play logic ourselves using gym.make()
-    # instead of ManagerBasedRlEnv, since ManagerBasedRlEnv doesn't work well with
-    # MyoSuite configs (it expects mjlab's observation system).
+    # For MyoSuite tasks, implement the full play logic ourselves (env created via
+    # make_myosuite_env_from_task_id).
 
     # Find MyoSuiteVecEnvWrapper and set clip_actions
     def find_myosuite_wrapper(env_obj):
