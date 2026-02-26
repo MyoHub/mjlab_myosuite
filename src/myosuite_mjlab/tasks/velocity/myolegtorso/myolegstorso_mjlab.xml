@@ -1,0 +1,24 @@
+<?xml version="1.0" ?>
+<!-- MyoLeg robot-only spec for mjlab (no terrain; scene is provided by framework). -->
+<mujoco model="MyoLegTorso_mjlab">
+    <compiler angle="radian" meshdir=".." texturedir=".."/>
+    <!-- Root mujoco include first so parser merges defaults from subsequent mujocoinclude files. -->
+    <include file="assets/mjlab_bootstrap.xml"/>
+    <include file="../torso/assets/myotorso_assets.xml"/>
+    <include file="../head/assets/myohead_simple_assets.xml"/>
+    <include file="assets/myolegs_assets.xml"/>
+    <include file="assets/myolegs_tendon.xml"/>
+    <include file="assets/myolegs_muscle.xml"/>
+
+    <worldbody>
+        <body name="root" pos="0 0 1" euler="0 0 -1.57">
+            <freejoint name="root"/>
+            <include file="../torso/assets/myotorso_chain.xml"/>
+            <include file="assets/myolegs_chain.xml"/>
+        </body>
+    </worldbody>
+
+    <keyframe>
+        <key qpos='0 0 0.92 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.161153 -0.0279385 -0.042 0.0025 0.001 0.461137 0.0275 0.136817 0.334 -0.00117 -0.000125 -0.0302 0.04 -0.194 0.161153 -0.0279385 -0.042 0.0025 0.001 0.461137 0.0275 0.136817 0.334 -0.00117 -0.000125 -0.0302 0.04 -0.194'/>
+    </keyframe>
+</mujoco>

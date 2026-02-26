@@ -4,7 +4,7 @@ repos:
     hooks:
       - id: pyright
         name: pyright
-        entry: uv run pyright
+        entry: uv run --group dev pyright
         language: system
         types: [python]
         pass_filenames: false # can be true if repo is large

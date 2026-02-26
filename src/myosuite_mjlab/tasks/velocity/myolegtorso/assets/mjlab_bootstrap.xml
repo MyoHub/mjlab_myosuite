@@ -1,0 +1,6 @@
+<?xml version="1.0" ?>
+<!-- Minimal root mujoco include so parser merges defaults from subsequent
+     mujocoinclude files (e.g. myotorso_assets, myolegs_assets). No worldbody. -->
+<mujoco>
+    <option timestep="0.002"/>
+</mujoco>

@@ -1,254 +1,71 @@
-# 🚧 Early Prototype — Community Feedback Welcome!
+# myosuite_mjlab
 
-This project is currently in an early prototype stage.
+Streamlined entrypoint for training [myosuite](https://github.com/MyoHub/myosuite) musculoskeletal models (MyoLeg, MyoSkeleton, MyoLegTorso) with [mjlab](https://github.com/mujocolab/mjlab). **Standalone:** depends only on public mjlab and myosuite; no fork required.
 
-Features, architecture, and documentation are actively evolving, and breaking changes are likely as we iterate.
+## What this package does
 
-We’re building this openly with the community, so feedback, ideas, and contributions are highly encouraged! If you’d like to help shape the direction of the project:
+- Registers musculoskeletal velocity, standing, and balance tasks using **public mjlab** APIs plus a small in-repo MDP extension (`myosuite_mjlab.mdp`) for tendon/synergy observations and curricula.
+- Resolves robot assets from the **myosuite** package at runtime.
+- Provides `mjlab-train` and `mjlab-play` so you can train and evaluate without modifying mjlab.
 
-Open an issue to share suggestions or report bugs
-Start a discussion about improvements
-Submit a pull request with enhancements Thank you for helping us improve this project!
+## Dependencies
 
-# MyoSuite to mjlab Integration
+- **[mjlab](https://github.com/mujocolab/mjlab)** (public) — Isaac Lab–style API with MuJoCo-Warp.
+- **myosuite** — musculoskeletal assets (XMLs, meshes) at `myosuite/simhive/myo_sim` (standard layout for a full pip install).
 
-Integration package for using MyoSuite environments with mjlab's training infrastructure.
-
-## Features
-
-- ✅ **Automatic Registration**: All MyoSuite environments are automatically registered with mjlab
-- ✅ **MJX/Warp Support**: Compatible with both standard MyoSuite and mjx/warp GPU-accelerated versions
-- ✅ **Native mjlab Integration**: Uses mjlab's native task registration when available
-- ✅ **Backward Compatible**: Falls back to gymnasium registry if mjlab native registration unavailable
-- ✅ **Full Test Coverage**: Comprehensive unit tests for all functionality
-
-## Installation
+## Install
 
 ```bash
-# Install mjlab-myosuite
-pip install -e .
-pip install "myosuite @ git+https://github.com/MyoHub/myosuite.git@mjx"
-
-# Or with uv (faster)
-uv venv
-uv pip install -e .
-uv pip install "myosuite @ git+https://github.com/MyoHub/myosuite.git@mjx"
+cd mjlab_myosuite
+uv sync
 ```
 
-## Quick Start
+## Musculoskeletal task IDs
 
-### 1. Basic Usage (gym based)
+All of these work with **public mjlab** (no fork):
 
-```python
-import gymnasium as gym
-import mjlab_myosuite  # Auto-registers all MyoSuite environments
+| Task ID                            | Description                                     |
+| ---------------------------------- | ----------------------------------------------- |
+| `Mjlab-Velocity-Flat-MyoLeg`       | MyoLeg velocity on flat terrain (tendon effort) |
+| `Mjlab-Velocity-Flat-MyoSkeleton`  | MyoSkeleton velocity on flat terrain            |
+| `Mjlab-Standing-Flat-MyoSkeleton`  | MyoSkeleton standing (zero velocity command)    |
+| `Mjlab-Velocity-Flat-MyoLegsTorso` | MyoLegTorso velocity on flat terrain            |
+| `Mjlab-Balance-Flat-MyoLegsTorso`  | MyoLegTorso standing balance (synergy actions)  |
 
-# Create a MyoSuite environment wrapped for mjlab
-env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0")
-obs, info = env.reset()
-action = env.action_space.sample()
-obs, rewards, dones, extras = env.step(action)
-env.close()
-```
-
-### 2. Training with mjlab
-
-**Use the mjlab training scripts**:
+## Train and play
 
 ```bash
-# Train a policy
-uv run train Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
-    --agent.max-iterations 200 \
-    --agent.num-steps-per-env 512
+# Train (example: MyoSkeleton, 4096 envs)
+uv run mjlab-train Mjlab-Velocity-Flat-MyoSkeleton --env.scene.num-envs 4096
 
-# Play with trained policy
-uv run play Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
-    --checkpoint_file logs/rsl_rl/myosuite/.../model_199.pt
+# Play (e.g. zero agent for sanity check)
+uv run mjlab-play Mjlab-Velocity-Flat-MyoSkeleton --agent zero
 ```
 
-### 3. Custom Task Registration
+## Assets
 
-For registering specific tasks with custom configurations, see:
+Models are resolved from the **myosuite** package. For a full pip install, assets live under **`myosuite/simhive/myo_sim`** (leg, torso, head, etc.). Override paths if needed:
 
-- `examples/example_task_registration.py` - Complete example following mjlab's tutorial pattern
-
-## Architecture
-
-The integration follows mjlab's native task registration pattern from the [create_new_task tutorial](https://github.com/mujocolab/mjlab/blob/main/notebooks/create_new_task.ipynb):
-
-```
-┌─────────────────────────────────────┐
-│   mjlab Training Pipeline           │
-│   (PPO, WandB, etc.)                │
-└──────────────┬──────────────────────┘
-               │
-┌──────────────▼──────────────────────┐
-│   MyoSuite Wrapper                  │
-│   - Adapts Gym API to mjlab         │
-│   - Handles batched operations      │
-└──────────────┬──────────────────────┘
-               │
-┌──────────────▼──────────────────────┐
-│   MyoSuite (Standard or MJX/Warp)   │
-│   - Musculoskeletal models          │
-│   - Task-specific rewards           │
-└─────────────────────────────────────┘
-```
-
-## Supported MyoSuite Versions
-
-- **Standard MyoSuite**: CPU-based MuJoCo simulation
-- **MJX/Warp MyoSuite**: GPU-accelerated from the [mjx branch](https://github.com/MyoHub/myosuite/tree/mjx/myosuite)
-
-The wrapper automatically detects and supports both versions.
-
-## Configuration
-
-### Environment Configuration
-
-```python
-from mjlab_myosuite.config import MyoSuiteEnvCfg
-
-cfg = MyoSuiteEnvCfg()
-cfg.num_envs = 4096  # For training
-cfg.device = "cuda:0"  # Use GPU for mjx/warp versions
-```
-
-### RL Configuration
-
-```python
-from mjlab_myosuite.config import get_default_myosuite_rl_cfg
-
-rl_cfg = get_default_myosuite_rl_cfg()
-rl_cfg.max_iterations = 2000
-rl_cfg.algorithm.learning_rate = 3e-4
-```
-
-## Known Issues
-
-TBD
-
-## ONNX Model Export
-
-MyoSuite environments support ONNX model export for deployment and inference. The `MyoSuiteOnPolicyRunner` automatically exports ONNX models when using wandb logging:
-
-```python
-from mjlab_myosuite.rl.runner import MyoSuiteOnPolicyRunner
-
-# During training, ONNX models are automatically exported
-runner = MyoSuiteOnPolicyRunner(env, agent_cfg, log_dir, device)
-runner.learn(num_learning_iterations=1000)
-# ONNX model is saved alongside the PyTorch checkpoint
-```
-
-The exported ONNX model includes:
-
-- Policy network (actor) with optional observation normalizer
-- MyoSuite-specific metadata (action dimensions, observation dimensions, etc.)
-- Compatibility with ManagerBasedRlEnv structure
-
-## Tracking Tasks (not yet fully implemented)
-
-MyoSuite tracking tasks follow the same structure as mjlab's tracking tasks, allowing you to train policies to track reference motions. The tracking functionality is implemented in `src/mjlab_myosuite/tasks/tracking/` following the [mjlab tracking structure](https://github.com/mujocolab/mjlab/tree/main/src/mjlab/tasks/tracking).
-
-### Tracking Configuration
-
-```python
-from mjlab_myosuite.tasks.tracking.tracking_env_cfg import MyoSuiteTrackingEnvCfg
-
-# Create tracking configuration
-cfg = MyoSuiteTrackingEnvCfg()
-cfg.num_envs = 4096
-cfg.device = "cuda:0"
-cfg.commands.motion.motion_file = "path/to/motion.npz"
-```
-
-### Training Tracking Tasks
-
-```bash
-# Train with motion file from wandb artifact
-uv run train Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0 \
-    --motion-file examples/elbow_sinusoidal_motion.npz     \
-    --agent.max-iterations 10000
-```
-
-### Playing Tracking Tasks
-
-```bash
-# Play with motion file
-uv run play Mjlab-MyoSuite-Tracking-myoElbowPose1D6MRandom-v0 \
-    --checkpoint_file logs/rsl_rl/myosuite/.../model_2000.pt \
-    --motion-file path/to/motion.npz
-```
-
-The tracking runner (`MyoSuiteMotionTrackingOnPolicyRunner`) extends the base MyoSuite runner and provides support for motion tracking, including wandb artifact integration for motion files.
-
-## Viser Playback Utility
-
-The `playback_with_viser` utility provides a convenient way to visualize policy execution using the Viser web-based viewer:
-
-```python
-from scripts.play import playback_with_viser
-import gymnasium as gym
-
-# Create environment and policy
-env = gym.make("Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0")
-policy = load_policy("path/to/checkpoint.pt")
-
-# Playback with Viser
-playback_with_viser(env, policy, verbose=True)
-```
-
-You can also use it from the command line:
-
-```bash
-# Use Viser viewer explicitly
-play Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
-    --viewer viser \
-    --checkpoint_file logs/rsl_rl/myosuite/.../model_2000.pt
-
-# Specify Viser server port
-play Mjlab-MyoSuite-myoElbowPose1D6MRandom-v0 \
-    --viewer viser \
-    --viser-port 8080 \
-    --checkpoint_file logs/rsl_rl/myosuite/.../model_2000.pt
-```
+- `MYOSUITE_MJLAB_MYOLEG_XML=/path/to/myolegs_mjlab.xml`
+- `MYOSUITE_MJLAB_MYOBODY_XML=/path/to/myobody.xml`
+- **MyoLegsTorso / balance:** `MYOSUITE_MJLAB_MYO_SIM` — myo_sim root (must contain `leg/`, `torso/`, `head/`). Only needed if that tree is not at `myosuite/simhive/myo_sim` (e.g. minimal install or custom layout).
 
 ## Testing
 
-```bash
-# Run all tests
-pytest tests/
+- **Loadability:** `uv run pytest tests/` runs tests that load registered tasks (no extra setup).
 
-# Run specific test
-pytest tests/test_myosuite_integration.py::test_wrapper_creation_direct
+## Adding new models and tasks
 
-# Run GPU acceleration tests (requires CUDA)
-pytest tests/test_gpu_acceleration.py -v
+### New robot model
 
-# Run ONNX export tests (requires ONNX)
-pytest tests/test_onnx_export.py -v
-```
+1. **Robot config** — Add a `robot_cfg.py` under a task folder (e.g. `src/myosuite_mjlab/tasks/velocity/<robot>/robot_cfg.py`) defining `ROBOT_CFG` (scene entity, XML path resolved from myosuite or env vars).
+2. **Env config** — In the same folder, add or extend `env_cfgs.py`: observations, rewards, terminations, and curricula. Use `myosuite_mjlab.mdp` for tendon/synergy helpers (e.g. `tendon_length`, `actuator_force`, `SynergyTendonEffortActionCfg`, `cyclic_hip_flexion_penalty`).
+3. **RL config** — Add `rl_cfg.py` with algorithm and experiment settings; expose an env config name that your loader will use.
 
-## Development
+### New task (velocity / standing / balance)
 
-Run tests:
+1. **Package** — Create a directory under `tasks/velocity/`, `tasks/standing/`, or (in mjlab) `tasks/balance/config/`, e.g. `tasks/velocity/<robot>/`.
+2. **Loader** — Implement a small loader that builds the env config (e.g. `make_velocity_env_cfg` with your robot and env_cfg), then call `register_mjlab_task(...)` with the task name and config.
+3. **Registration** — In that package’s `__init__.py`, import the loader so it runs on `import myosuite_mjlab.tasks`; the task will then appear in `mjlab.tasks.registry.list_tasks()` and be usable with `mjlab-train` / `mjlab-play`.
 
-```bash
-make test          # Run all tests
-make test-fast     # Skip slow integration tests
-uv run --no-default-groups --group cu128 --group dev pyright
-uv run --no-default-groups --group cu128 --group dev pytest
-```
-
-Format code:
-
-```bash
-uvx pre-commit install
-make format
-```
-
-## Documentation
-
-- [mjlab Tutorial](https://github.com/mujocolab/mjlab/blob/main/notebooks/create_new_task.ipynb) - Official mjlab task creation tutorial
-- [MyoSuite Documentation](https://myosuite.readthedocs.io/) - MyoSuite documentation
+Use existing tasks as templates: e.g. `tasks/velocity/myoleg/` (robot_cfg, env_cfgs, rl_cfg, `__init__.py` registration).

@@ -16,3 +16,4 @@ artifacts/
 render_robots.py
 .ruff_cache/
 debug/
+.pytest_cache/

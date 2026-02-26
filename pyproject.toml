@@ -1,86 +1,40 @@
 [build-system]
-requires = ["uv_build>=0.8.19,<0.9.0"]
-build-backend = "uv_build"
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
 
 [project]
-name = "mjlab-myosuite"
+name = "myosuite_mjlab"
 version = "0.1.0"
-license = "Apache-2.0"
-license-files = ["LICENSE", "LICENSE"]
-readme = { file = "README.md", content-type = "text/markdown" }
-authors = [
-    {name = "The MjLab Developers"},
-]
-keywords = ["mujoco",  "mujoco-warp", "simulation", "reinforcement-learning", "robotics"]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3 :: Only",
-    "Typing :: Typed",
-    "Environment :: GPU :: NVIDIA CUDA",
-    "Topic :: Scientific/Engineering",
-    "Natural Language :: English",
-]
-description = "Isaac Lab API, powered by MuJoCo-Warp, for RL and robotics research."
-requires-python = ">=3.10,<3.14"
+description = "Minimal MyoSuite task integration package for mjlab"
+readme = "README.md"
+requires-python = "==3.11.*"
 dependencies = [
-    "mjlab @ git+https://github.com/mujocolab/mjlab.git",
-    "ruff>=0.14.0"
+  "mjlab",
+  "mujoco>=3.2",
+  "torch",
+  "rsl-rl-lib",
+  "pytest>=9.0.2",
+  "myosuite",
+  "pre-commit>=4.5.1",
 ]
-
-[project.urls]
-  "Bug Reports" = "https://github.com/mujocolab/mjlab/issues"
-  "Source" = "https://github.com/mujocolab/mjlab"
 
 [project.scripts]
-train = "mjlab_myosuite.scripts.train:main"
-play = "mjlab_myosuite.scripts.play:main"
+mjlab-train = "myosuite_mjlab.scripts.train:main"
+mjlab-play = "myosuite_mjlab.scripts.play:main"
 
 [dependency-groups]
 dev = [
-  "ipdb>=0.13.13",
-  "pre-commit>=4.3.0",
-  "pyright>=1.1.407",
-  "pytest>=8.4.2",
-  "ruff>=0.14.3",
-  "ty>=0.0.1a23",
+  "pyright>=1.1.408",
+  "ruff>=0.14.14",
 ]
-cpu = ["torch>=2.7.0"]
-cu128 = ["torch>=2.7.0"]
 
 [tool.uv]
-default-groups = ["dev", "cu128"]
-conflicts = [
-  [
-    { group = "cpu" },
-    { group = "cu128" },
-  ],
+override-dependencies = [
+  "h5py>=3.12.0",
+  "cloudpickle>=3.0.0",
+  # Pin to 3.4.x so MjData layout matches mujoco-warp (3.5.x changed flexedge fields).
+  "mujoco>=3.4.0,<3.5",
 ]
-
-[[tool.uv.index]]
-url = "https://pypi.org/simple"
-
-[[tool.uv.index]]
-name = "nvidia"
-url = "https://pypi.nvidia.com/"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
 
 [[tool.uv.index]]
 name = "mujoco"
@@ -88,38 +42,22 @@ url = "https://py.mujoco.org"
 explicit = true
 
 [tool.uv.sources]
-mujoco-warp = { git = "https://github.com/google-deepmind/mujoco_warp", rev = "e605c406363805d949b75d50dd5ffb3d79bc3f70"}
-warp-lang = { index = "nvidia", marker = "sys_platform != 'darwin'" }
+# Use local mjlab (has tasks.registry and full task stack). Omit or switch to pypi for a pure pip install.
+mjlab = { path = "../mjlab", editable = true }
+myosuite = { git = "https://github.com/MyoHub/myosuite.git", rev = "mjx" }
+# Resolve mujoco from py.mujoco.org so version matches mujoco-warp (avoids flexedge_J_rownnz ABI error).
 mujoco = { index = "mujoco" }
-torch = [
-  { index = "pytorch-cpu", group = "cpu" },
-  { index = "pytorch-cu128", group = "cu128" },
-]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/myosuite_mjlab"]
 
 [tool.ruff]
-indent-width = 2
-exclude = [
-  "typings",
-]
-
-[tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I", "B"]
+line-length = 88
 
 [tool.pyright]
-pythonVersion = "3.10"
-stubPath = "typings"
-typeCheckingMode = "basic"
-reportMissingImports = false
-reportIncompatibleVariableOverride = false
-reportIncompatibleMethodOverride = false
-reportAttributeAccessIssue = false
-
-[tool.ty.environment]
-extra-paths = ["typings"]
-
-
-[tool.pytest.ini_options]
-markers = [
-  "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-]
-addopts = "--strict-markers"
+# Relax so pre-commit passes; mjlab/mujoco and dataclass configs are typed at runtime.
+reportAttributeAccessIssue = "warning"
+reportOptionalMemberAccess = "warning"
+reportOperatorIssue = "warning"
+reportOptionalOperand = "warning"
+reportUndefinedVariable = "warning"
