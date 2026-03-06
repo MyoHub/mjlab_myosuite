@@ -104,23 +104,42 @@ def get_myolegtorso_spec() -> mujoco.MjSpec:
 
             with tempfile.TemporaryDirectory(prefix="myolegtorso_mjlab_") as tmp:
                 tmp = Path(tmp)
-                (tmp / "leg").mkdir()
+                # Recreate the myo_sim layout expected by the XML includes:
+                # tmp/myo_sim/{leg,torso,head,meshes}/...
+                tmp_myo = tmp / "myo_sim"
+                tmp_myo.mkdir()
+
+                # leg: our custom XML plus assets copied from myosuite.
+                tmp_leg = tmp_myo / "leg"
+                tmp_leg.mkdir()
                 shutil.copy(
                     our_dir / "myolegstorso_mjlab.xml",
-                    tmp / "leg" / "myolegstorso_mjlab.xml",
+                    tmp_leg / "myolegstorso_mjlab.xml",
                 )
-                (tmp / "leg" / "assets").mkdir()
+                (tmp_leg / "assets").mkdir()
                 for f in leg_assets.iterdir():
-                    (tmp / "leg" / "assets" / f.name).symlink_to(f)
+                    (tmp_leg / "assets" / f.name).symlink_to(f)
                 shutil.copy(
                     our_dir / "assets" / "mjlab_bootstrap.xml",
-                    tmp / "leg" / "assets" / "mjlab_bootstrap.xml",
+                    tmp_leg / "assets" / "mjlab_bootstrap.xml",
                 )
-                (tmp / "torso").symlink_to(myo_sim / "torso")
-                (tmp / "head").symlink_to(myo_sim / "head")
-                spec = mujoco.MjSpec.from_file(
-                    str(tmp / "leg" / "myolegstorso_mjlab.xml")
-                )
+
+                # torso/head: only assets need to be reachable via "../torso/assets/..."
+                tmp_torso = tmp_myo / "torso"
+                tmp_torso.mkdir()
+                (tmp_torso / "assets").symlink_to(myo_sim / "torso" / "assets")
+                tmp_head = tmp_myo / "head"
+                tmp_head.mkdir()
+                (tmp_head / "assets").symlink_to(myo_sim / "head" / "assets")
+
+                # Some torso assets reference meshes via paths like "../meshes/..."
+                # or "myo_sim/meshes/..." relative to the torso directory.
+                if (myo_sim / "meshes").exists():
+                    (tmp_myo / "meshes").symlink_to(myo_sim / "meshes")
+                    # Make "torso/myo_sim/meshes" resolve to the same meshes directory.
+                    (tmp_torso / "myo_sim").symlink_to(tmp_myo)
+
+                spec = mujoco.MjSpec.from_file(str(tmp_leg / "myolegstorso_mjlab.xml"))
 
     spec.option.jacobian = mujoco.mjtJacobian.mjJAC_SPARSE
     if myo_sim_root is None:

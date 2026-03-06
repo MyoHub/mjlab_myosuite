@@ -1,3 +1,15 @@
+# 🚧 Early Prototype — Community Feedback Welcome!
+
+This project is currently in an early prototype stage.
+
+Features, architecture, and documentation are actively evolving, and breaking changes are likely as we iterate.
+
+We’re building this openly with the community, so feedback, ideas, and contributions are highly encouraged! If you’d like to help shape the direction of the project:
+
+Open an issue to share suggestions or report bugs
+Start a discussion about improvements
+Submit a pull request with enhancements Thank you for helping us improve this project!
+
 # myosuite_mjlab
 
 Streamlined entrypoint for training [myosuite](https://github.com/MyoHub/myosuite) musculoskeletal models (MyoLeg, MyoSkeleton, MyoLegTorso) with [mjlab](https://github.com/mujocolab/mjlab). **Standalone:** depends only on public mjlab and myosuite; no fork required.
@@ -24,23 +36,27 @@ uv sync
 
 All of these work with **public mjlab** (no fork):
 
-| Task ID                            | Description                                     |
-| ---------------------------------- | ----------------------------------------------- |
-| `Mjlab-Velocity-Flat-MyoLeg`       | MyoLeg velocity on flat terrain (tendon effort) |
-| `Mjlab-Velocity-Flat-MyoSkeleton`  | MyoSkeleton velocity on flat terrain            |
-| `Mjlab-Standing-Flat-MyoSkeleton`  | MyoSkeleton standing (zero velocity command)    |
-| `Mjlab-Velocity-Flat-MyoLegsTorso` | MyoLegTorso velocity on flat terrain            |
-| `Mjlab-Balance-Flat-MyoLegsTorso`  | MyoLegTorso standing balance (synergy actions)  |
+| Task ID                                    | Description                                     |
+| ------------------------------------------ | ----------------------------------------------- |
+| `MjlabMyoSuite-Velocity-Flat-MyoLeg`       | MyoLeg velocity on flat terrain (tendon effort) |
+| `MjlabMyoSuite-Velocity-Flat-MyoSkeleton`  | MyoSkeleton velocity on flat terrain            |
+| `MjlabMyoSuite-Standing-Flat-MyoSkeleton`  | MyoSkeleton standing (zero velocity command)    |
+| `MjlabMyoSuite-Velocity-Flat-MyoLegsTorso` | MyoLegTorso velocity on flat terrain            |
+| `MjlabMyoSuite-Balance-Flat-MyoLegsTorso`  | MyoLegTorso standing balance (synergy actions)  |
 
 ## Train and play
 
 ```bash
 # Train (example: MyoSkeleton, 4096 envs)
-uv run mjlab-train Mjlab-Velocity-Flat-MyoSkeleton --env.scene.num-envs 4096
+uv run mjlab-train MjlabMyoSuite-Velocity-Flat-MyoSkeleton --env.scene.num-envs 4096
 
 # Play (e.g. zero agent for sanity check)
-uv run mjlab-play Mjlab-Velocity-Flat-MyoSkeleton --agent zero
+uv run mjlab-play MjlabMyoSuite-Velocity-Flat-MyoSkeleton --agent zero
 ```
+
+**Rendered motion during training → wandb:** use `--video True` and `--agent.logger wandb`.
+Videos are saved under the run directory and logged to the current wandb run as `train_video`.
+For headless servers, the train script sets `MUJOCO_GL=egl` before loading MuJoCo; if you see OpenGL errors, try `export MUJOCO_GL=osmesa` (software rendering).
 
 ## Assets
 

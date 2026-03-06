@@ -17,18 +17,25 @@ import pytest
 
 def test_musculoskeletal_tasks_loadable_without_fork() -> None:
     """Load env_cfg and rl_cfg for musculoskeletal task IDs (no fork required)."""
-    import myosuite_mjlab.tasks  # noqa: F401  # triggers registration
-
     from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 
-    # MyoSkeleton (always on public mjlab); MyoLeg and Balance need our mdp extension
-    task_id = "Mjlab-Velocity-Flat-MyoLeg"
-    env_cfg = load_env_cfg(task_id)
-    rl_cfg = load_rl_cfg(task_id)
-    runner_cls = load_runner_cls(task_id)
-    assert env_cfg is not None
-    assert rl_cfg is not None
-    assert runner_cls is not None
+    # Importing the top-level package should register all MyoSuite tasks.
+    import myosuite_mjlab  # noqa: F401
+
+    task_ids = [
+        "MjlabMyoSuite-Velocity-Flat-MyoLeg",
+        "MjlabMyoSuite-Velocity-Flat-MyoSkeleton",
+        "MjlabMyoSuite-Standing-Flat-MyoSkeleton",
+        "MjlabMyoSuite-Velocity-Flat-MyoLegsTorso",
+        "MjlabMyoSuite-Balance-Flat-MyoLegsTorso",
+    ]
+    for task_id in task_ids:
+        env_cfg = load_env_cfg(task_id)
+        rl_cfg = load_rl_cfg(task_id)
+        runner_cls = load_runner_cls(task_id)
+        assert env_cfg is not None, f"env_cfg missing for {task_id}"
+        assert rl_cfg is not None, f"rl_cfg missing for {task_id}"
+        assert runner_cls is not None, f"runner_cls missing for {task_id}"
 
 
 def _find_fork_src() -> Path | None:

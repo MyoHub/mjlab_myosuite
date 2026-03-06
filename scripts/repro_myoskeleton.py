@@ -16,7 +16,7 @@ from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls  # n
 
 
 def main():
-    task = "Mjlab-Velocity-Flat-MyoSkeleton"
+    task = "MjlabMyoSuite-Velocity-Flat-MyoSkeleton"
     device = "cpu"
 
     print(f"Loading task {task}...")

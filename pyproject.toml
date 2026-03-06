@@ -42,8 +42,6 @@ url = "https://py.mujoco.org"
 explicit = true
 
 [tool.uv.sources]
-# Use local mjlab (has tasks.registry and full task stack). Omit or switch to pypi for a pure pip install.
-mjlab = { path = "../mjlab", editable = true }
 myosuite = { git = "https://github.com/MyoHub/myosuite.git", rev = "mjx" }
 # Resolve mujoco from py.mujoco.org so version matches mujoco-warp (avoids flexedge_J_rownnz ABI error).
 mujoco = { index = "mujoco" }

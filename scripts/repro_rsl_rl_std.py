@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import argparse
 
-import myosuite_mjlab.tasks  # noqa: F401
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 
+import myosuite_mjlab.tasks  # noqa: F401
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", default="Mjlab-Velocity-Flat-MyoLeg")
+    parser.add_argument("--task", default="MjlabMyoSuite-Velocity-Flat-MyoLeg")
     parser.add_argument("--num-envs", type=int, default=32)
     parser.add_argument("--iters", type=int, default=2)
     parser.add_argument("--device", default="cpu")

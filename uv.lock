@@ -774,7 +774,7 @@ wheels = [
 [[package]]
 name = "mjlab"
 version = "1.0.0"
-source = { editable = "../mjlab" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "moviepy" },
     { name = "mujoco" },
@@ -793,54 +793,9 @@ dependencies = [
     { name = "wandb" },
     { name = "warp-lang" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "moviepy" },
-    { name = "mujoco", specifier = ">=3.4.0", index = "https://py.mujoco.org/" },
-    { name = "mujoco-warp", git = "https://github.com/google-deepmind/mujoco_warp?rev=0828fb0b57d7baf734dd71fa164d092cb17e635b" },
-    { name = "onnxscript", specifier = ">=0.5.4" },
-    { name = "prettytable" },
-    { name = "rsl-rl-lib", specifier = "==4.0.1" },
-    { name = "tensorboard", specifier = ">=2.20.0" },
-    { name = "tensordict" },
-    { name = "torch", specifier = ">=2.5.0" },
-    { name = "torch", marker = "sys_platform == 'darwin' and extra == 'cu128'", specifier = ">=2.7.0" },
-    { name = "torch", marker = "sys_platform != 'darwin' and extra == 'cu128'", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "mjlab", extra = "cu128" } },
-    { name = "torchrunx", specifier = ">=0.3.4" },
-    { name = "tqdm" },
-    { name = "trimesh", specifier = ">=4.8.3" },
-    { name = "tyro", specifier = ">=1.0.1" },
-    { name = "viser", specifier = ">=1.0.21" },
-    { name = "wandb", specifier = ">=0.22.3" },
-    { name = "warp-lang", marker = "sys_platform != 'darwin'", specifier = ">=1.12.0.dev0", index = "https://pypi.nvidia.com/" },
-    { name = "warp-lang", marker = "sys_platform == 'darwin'", specifier = ">=1.12.0.dev0" },
-]
-provides-extras = ["cu128"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "ipdb", specifier = ">=0.13.13" },
-    { name = "pre-commit", specifier = ">=4.3.0" },
-    { name = "pyright", specifier = ">=1.1.408" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "ruff", specifier = ">=0.14.14" },
-    { name = "ty", specifier = ">=0.0.14" },
-]
-docs = [
-    { name = "autodocsumm" },
-    { name = "myst-parser", specifier = ">=4.0.1" },
-    { name = "sphinx", specifier = ">=8.1.3" },
-    { name = "sphinx-autobuild", specifier = ">=2024.10.3" },
-    { name = "sphinx-autodoc-typehints", specifier = ">=3.0.1" },
-    { name = "sphinx-book-theme", specifier = ">=1.1.4" },
-    { name = "sphinx-copybutton", specifier = ">=0.5.2" },
-    { name = "sphinx-design", specifier = ">=0.6.1" },
-    { name = "sphinx-icon" },
-    { name = "sphinx-multiversion" },
-    { name = "sphinx-tabs" },
-    { name = "sphinxcontrib-bibtex" },
-    { name = "sphinxemoji" },
+sdist = { url = "https://files.pythonhosted.org/packages/5e/4b/582d1ca76d8e99f5993487f3b5893fe970f1d4ba3e8adfa2a9c3349c578c/mjlab-1.0.0.tar.gz", hash = "sha256:c4d250aa2e3e5690e0a984d00382d2ebdc61f0630ebafd7b218a8d29183fac30", size = 13972399, upload-time = "2026-02-02T20:07:19.775Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6d/13/ad6c9a6818b85d3fce8549ca78107312a4f0f16c6e62e27cb9dca7a68e34/mjlab-1.0.0-py3-none-any.whl", hash = "sha256:5a69d06e096e146e1e0525a86a46a7acdd9b6595512bff141e0e4e71ea6dabcd", size = 14046598, upload-time = "2026-02-02T20:07:23.089Z" },
 ]
 
 [[package]]
@@ -922,13 +877,17 @@ wheels = [
 [[package]]
 name = "mujoco-warp"
 version = "0.0.2"
-source = { git = "https://github.com/google-deepmind/mujoco_warp?rev=0828fb0b57d7baf734dd71fa164d092cb17e635b#0828fb0b57d7baf734dd71fa164d092cb17e635b" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "absl-py" },
     { name = "etils", extra = ["epath"] },
     { name = "mujoco" },
     { name = "numpy" },
     { name = "warp-lang" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6b/2d/e6a6eba33b7aa35f1ca405c1e6182583574ff277fdf3e531477b1db1bce4/mujoco_warp-0.0.2.tar.gz", hash = "sha256:3a357a2b73aae8add6956b0fff0e68b8428fb793dee952abf77c1860bc293ca3", size = 1300987, upload-time = "2026-01-08T21:52:57.847Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/ef/6affa8e9ba6ad336d6132fe7d68c09c0243dd977e3fc0abd739902512d55/mujoco_warp-0.0.2-py3-none-any.whl", hash = "sha256:4d78a096a20fa786f78ca1842b22f1798bf45128614bb4547155c3d77e4a76e8", size = 1369684, upload-time = "2026-01-08T21:52:55.952Z" },
 ]
 
 [[package]]
@@ -972,7 +931,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mjlab", editable = "../mjlab" },
+    { name = "mjlab" },
     { name = "mujoco", specifier = ">=3.2", index = "https://py.mujoco.org/" },
     { name = "myosuite", git = "https://github.com/MyoHub/myosuite.git?rev=mjx" },
     { name = "pre-commit", specifier = ">=4.5.1" },
@@ -1649,20 +1608,19 @@ wheels = [
 
 [[package]]
 name = "rsl-rl-lib"
-version = "4.0.1"
+version = "3.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gitpython" },
     { name = "numpy" },
     { name = "onnx" },
-    { name = "onnxscript" },
     { name = "tensordict" },
     { name = "torch" },
     { name = "torchvision" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/aa/5b/5bea7c110c389f9336ebe5ad7cd9abbcbbb64d7de0d0f50c2af8fa2ce321/rsl_rl_lib-4.0.1.tar.gz", hash = "sha256:76a194e4834946716cc0e44dcd2be8b2254ac969c2452b145cd268c9cc908bf7", size = 41069, upload-time = "2026-02-09T09:15:10.927Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bc/7b/8a888898fa3dd79ffc16a80498b592430597fe85152b0a7567c05d576fa1/rsl_rl_lib-3.1.0.tar.gz", hash = "sha256:864d9e548bc27593e4fccbce9ad90678dee11866d980d150038afa8e8bf87f55", size = 35375, upload-time = "2025-09-18T08:21:50.376Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/31/db/8fa8832e6e02e5c4dc8321eb1596d5968b86a214fca03af361c94b8b045f/rsl_rl_lib-4.0.1-py3-none-any.whl", hash = "sha256:e840c8587acaad4ba3ab34fc7b07a203b34dd44a831ea9dc5de1769bfc14b148", size = 53803, upload-time = "2026-02-09T09:15:09.705Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/37/46f6122fd8efa71d59497cfd3e078a373875535ab0b4f550f7aa47945224/rsl_rl_lib-3.1.0-py3-none-any.whl", hash = "sha256:142ae1c7fc9920d0c209223a4d7ab12ed974944dc0db642161fe01dba64ab4c9", size = 49362, upload-time = "2025-09-18T08:21:48.409Z" },
 ]
 
 [[package]]
@@ -2145,16 +2103,11 @@ wheels = [
 [[package]]
 name = "warp-lang"
 version = "1.13.0.dev20260225"
-source = { registry = "https://pypi.nvidia.com/" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
-wheels = [
-    { url = "https://pypi.nvidia.com/warp-lang/warp_lang-1.13.0.dev20260225-py3-none-macosx_11_0_arm64.whl", hash = "sha256:09c51c9b7d55731c826e1e3a6bd255f2f7a49487503baece5a9ce4f9fd3f0b07" },
-    { url = "https://pypi.nvidia.com/warp-lang/warp_lang-1.13.0.dev20260225-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:0d36c657b7ea54f9dd9bca539641bebdb14cca11fb1c578b3d468d405e0809c9" },
-    { url = "https://pypi.nvidia.com/warp-lang/warp_lang-1.13.0.dev20260225-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:9b07066107e4464be1d968226df941045ea5841c9f0f582f0500b6a9791ebf75" },
-    { url = "https://pypi.nvidia.com/warp-lang/warp_lang-1.13.0.dev20260225-py3-none-win_amd64.whl", hash = "sha256:80dbe212e93f18868a587e1d0944e83f694b47f3c7cef82a9d2a6287fda3c79c" },
-]
+sdist = { url = "https://files.pythonhosted.org/packages/99/37/3e2127007c18fa8737dc48339e2cc5c97b1052a985a3cde91e326198c1e9/warp_lang-1.13.0.dev20260225.tar.gz", hash = "sha256:a8cff7048d33ad558de68bd9f964e8f80152758e78cbbc2eb79d1887efc1797b", size = 5067, upload-time = "2026-02-25T09:14:11.621Z" }
 
 [[package]]
 name = "wcwidth"

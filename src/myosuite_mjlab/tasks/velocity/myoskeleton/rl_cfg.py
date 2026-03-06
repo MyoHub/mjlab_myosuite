@@ -11,7 +11,7 @@ def myoskeleton_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     """Create RL runner configuration for MyoSkeleton velocity task."""
     return RslRlOnPolicyRunnerCfg(
         actor=RslRlModelCfg(
-            hidden_dims=(512, 256, 128),
+            hidden_dims=(512, 512),
             activation="elu",
             obs_normalization=True,
             init_noise_std=1.0,
@@ -19,7 +19,7 @@ def myoskeleton_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
             stochastic=True,
         ),
         critic=RslRlModelCfg(
-            hidden_dims=(512, 256, 128),
+            hidden_dims=(512, 512),
             activation="elu",
             obs_normalization=True,
             stochastic=False,

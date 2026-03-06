@@ -11,11 +11,6 @@ from dataclasses import replace
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs import mdp as envs_mdp
 from mjlab.managers.curriculum_manager import CurriculumTermCfg
-from myosuite_mjlab.mdp import (
-    SynergyTendonEffortActionCfg,
-    action_scale_curriculum,
-    push_velocity_curriculum,
-)
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.observation_manager import ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
@@ -26,6 +21,11 @@ from mjlab.tasks.velocity import mdp
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.tasks.velocity.velocity_env_cfg import make_velocity_env_cfg
 
+from myosuite_mjlab.mdp import (
+    SynergyTendonEffortActionCfg,
+    action_scale_curriculum,
+    push_velocity_curriculum,
+)
 from myosuite_mjlab.tasks.velocity.myolegtorso.robot_cfg import (
     get_myolegtorso_robot_cfg,
 )
@@ -83,11 +83,16 @@ def myolegtorso_balance_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         params={
             "action_name": "tendon_synergy",
             "stages": [
+                # {"step": 0, "scale": 0.05},
+                # {"step": 50_000, "scale": 0.15},
+                # {"step": 100_000, "scale": 0.4},
+                # {"step": 200_000, "scale": 0.7},
+                # {"step": 300_000, "scale": 1.0},
                 {"step": 0, "scale": 0.05},
-                {"step": 50_000, "scale": 0.15},
-                {"step": 100_000, "scale": 0.4},
-                {"step": 200_000, "scale": 0.7},
-                {"step": 300_000, "scale": 1.0},
+                {"step": 20_000, "scale": 0.15},
+                {"step": 40_000, "scale": 0.4},
+                {"step": 60_000, "scale": 0.7},
+                {"step": 80_000, "scale": 1.0},
             ],
         },
     )
@@ -207,7 +212,8 @@ def myolegtorso_balance_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     )
 
     cfg.episode_length_s = 20.0
-    cfg.viewer.body_name = "pelvis"
+    if cfg.viewer is not None:
+        cfg.viewer.body_name = "pelvis"
 
     if play:
         cfg.episode_length_s = int(1e9)
